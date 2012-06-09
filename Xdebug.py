@@ -16,6 +16,131 @@ debug_view = None
 protocol = None
 buffers = {}
 
+def lookup_view(v):
+    '''
+    Convert a Sublime View into an XdebugView
+    '''
+    if isinstance(v, XdebugView):
+        return v
+    if isinstance(v, sublime.View):
+        id = v.buffer_id()
+        if id in buffers:
+            buffers[id].view = v
+        else:
+            buffers[id] = XdebugView(v)
+        return buffers[id]
+    return None
+
+
+def show_file(window, uri):
+    '''
+    Open or focus a window
+    '''
+    if window:
+        window.focus_group(0)
+    transport, filename = uri.split('://', 1)
+    if filename.startswith('/C:/'):
+        filename = filename[1:]
+    print '>>>transport: ' + transport
+    print '>>>filename: ' + filename
+    if transport == 'file' and os.path.exists(filename):
+        print '>>>showing view: ' + filename
+        window = sublime.active_window()
+        views = window.views()
+        found = False
+        for v in views:
+            if v.file_name():
+                path = os.path.realpath(v.file_name())
+                if path == os.path.realpath(filename):
+                    view = v
+                    window.focus_view(v)
+                    found = True
+                    break
+        if not found:
+            #view = window.open_file(filename, sublime.TRANSIENT)
+            view = window.open_file(filename)
+        return lookup_view(view)
+
+
+def reset_current():
+    '''
+    Reset the current line marker
+    '''
+    global xdebug_current
+    if xdebug_current:
+        xdebug_current.erase_regions('xdebug_current_line')
+        xdebug_current = None
+
+
+def get_setting(key, default=None):
+    '''
+    Get an xdebug setting, settings are resolved by first looking in the
+    sublime project file if it exists.
+
+    Xdebug project settings are stored in the sublime project file
+    as a dictionary:
+
+        "xdebug": { "key": "value", ... }
+
+    If the setting is not found in the project file, the plugin will look
+    into the sublime plugin settings file
+    '''
+    try:
+        for folder in sublime.active_window().folders():
+            #print 'Looking for sublime-project file in : ' + folder
+            files = os.listdir(folder)
+            for f in files:
+                #print 'File: ' + f
+                if f.endswith('sublime-project'):
+                    with open(os.path.join(folder, f), 'r') as settings_file:
+                        settings = json.load(settings_file)
+                        if 'xdebug' in settings:
+                            if key in settings['xdebug']:
+                                return settings['xdebug'][key]
+            return sublime.load_settings("SublimeXdebug.sublime-settings").get(key, default)
+    except:
+        pass
+
+
+def add_debug_info(name, data):
+    '''
+    Adds data to the debug output windows
+    '''
+    found = False
+    v = None
+    window = sublime.active_window()
+
+    print '<<<>>> ' + data
+    if name == 'context':
+        group = 1
+        fullName = "Xdebug Context"
+    if name == 'stack':
+        group = 2
+        fullName = "Xdebug Stack"
+
+    for v in window.views():
+        if v.name() == fullName:
+            found = True
+            break
+
+    if not found:
+        v = window.new_file()
+        v.set_scratch(True)
+        v.set_read_only(True)
+        v.set_name(fullName)
+        found = True
+
+    if found:
+        v.set_read_only(False)
+        window.set_view_index(v, group, 0)
+        edit = v.begin_edit()
+        v.erase(edit, sublime.Region(0, v.size()))
+        v.insert(edit, 0, data)
+        v.end_edit(edit)
+        v.set_read_only(True)
+
+    window.focus_group(0)
+
 
 class DebuggerException(Exception):
     pass
@@ -35,7 +160,7 @@ class Protocol(object):
     '''
 
     read_rate = 1024
-    port = 9000
+    port = get_setting('port')
 
     def __init__(self):
         self.clear()
@@ -125,6 +250,7 @@ class Protocol(object):
 
         if serv:
             try:
+                sublime.set_timeout(lambda: sublime.status_message('Xdebug: Waiting for connection'), 0)
                 serv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 serv.settimeout(1)
                 serv.bind(('', self.port))
@@ -132,11 +258,13 @@ class Protocol(object):
                 self.listening = True
                 self.sock = None
             except Exception, x:
+                sublime.set_timeout(lambda: sublime.status_message('Xdebug: Could not initialize port'), 0)
                 raise(ProtocolConnectionException, x)
 
             while self.listening:
                 try:
                     self.sock, address = serv.accept()
+                    sublime.set_timeout(lambda: sublime.status_message('Xdebug: Connected'), 0)
                     self.listening = False
                 except socket.timeout:
                     pass
@@ -156,6 +284,11 @@ class Protocol(object):
             return self.sock
         else:
             raise ProtocolConnectionException('Could not create socket')
+
+    def is_connected():
+        if protocol and protocol.connected:
+            return True
+        return False
 
 
 class XdebugView(object):
@@ -279,7 +412,6 @@ class XdebugListenCommand(sublime_plugin.TextCommand):
             sublime.set_timeout(self.gui_callback, 0)
 
     def gui_callback(self):
-        sublime.status_message('Xdebug: Connected')
         init = protocol.read().firstChild
         uri = init.getAttribute('fileuri')
         show_file(self.view.window(), uri)
@@ -356,7 +488,7 @@ class XdebugCommand(sublime_plugin.TextCommand):
             if url:
                 webbrowser.open(url + '?XDEBUG_SESSION_START=sublime.xdebug')
             else:
-                sublime.status_message('Xdebug: No URL defined in project settings file.')
+                sublime.set_timeout(lambda: sublime.status_message('Xdebug: No URL defined in project settings file.'), 0)
 
             global original_layout
             global debug_view
@@ -374,7 +506,7 @@ class XdebugCommand(sublime_plugin.TextCommand):
             if url:
                 webbrowser.open(url + '?XDEBUG_SESSION_STOP=sublime.xdebug')
             else:
-                sublime.status_message('Xdebug: No URL defined in project settings file.')
+                sublime.set_timeout(lambda: sublime.status_message('Xdebug: No URL defined in project settings file.'), 0)
             window = sublime.active_window()
             window.set_layout(original_layout)
 
@@ -411,11 +543,13 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
 
         protocol.send(state)
         res = protocol.read().firstChild
+        print res.childNodes
 
         for child in res.childNodes:
+            print 'node name: ' + child.nodeName
             if child.nodeName == 'xdebug:message':
-                #print '>>>break ' + child.getAttribute('filename') + ':' + child.getAttribute('lineno')
-                sublime.status_message('Xdebug: breakpoint')
+                print '>>>break ' + child.getAttribute('filename') + ':' + child.getAttribute('lineno')
+                sublime.set_timeout(lambda: sublime.status_message('Xdebug: breakpoint'), 0)
                 xdebug_current = show_file(self.view.window(), child.getAttribute('filename'))
                 xdebug_current.current(int(child.getAttribute('lineno')))
 
@@ -463,15 +597,15 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
         if res.getAttribute('status') == 'stopping' or res.getAttribute('status') == 'stopped':
             self.view.run_command('xdebug_clear')
             self.view.run_command('xdebug_listen')
-            sublime.status_message('Xdebug: Page finished executing. Reload to continue debugging.')
+            sublime.set_timeout(lambda: sublime.status_message('Xdebug: Page finished executing. Reload to continue debugging.'), 0)
 
     def is_enabled(self):
         if protocol and protocol.connected:
             return True
         if protocol:
-            sublime.status_message('Xdebug: Waiting for executing to start')
+            sublime.set_timeout(lambda: sublime.status_message('Xdebug: Waiting for executing to start'), 0)
             return False
-        sublime.status_message('Xdebug: Not running')
+        sublime.set_timeout(lambda: sublime.status_message('Xdebug: Not running'), 0)
         return False
 
 
@@ -581,114 +715,14 @@ class EventListener(sublime_plugin.EventListener):
         lookup_view(view).on_query_context(key, operator, operand, match_all)
 
 
-def lookup_view(v):
-    '''
-    Convert a Sublime View into an XdebugView
-    '''
-    if isinstance(v, XdebugView):
-        return v
-    if isinstance(v, sublime.View):
-        id = v.buffer_id()
-        if id in buffers:
-            buffers[id].view = v
-        else:
-            buffers[id] = XdebugView(v)
-        return buffers[id]
-    return None
+class XdebugDoubleClick(sublime_plugin.TextCommand):
+    def run(self, edit):
+        print 'here'
+        row, col = self.view.rowcol(self.view.sel()[0].a)
+        print row
+        print col
 
-
-def show_file(window, uri):
-    '''
-    Open or focus a window
-    '''
-    if window:
-        window.focus_group(0)
-    transport, filename = uri.split('://', 1)
-    if transport == 'file' and os.path.exists(filename):
-        window = sublime.active_window()
-        views = window.views()
-        found = False
-        for v in views:
-            if v.file_name():
-                path = os.path.realpath(v.file_name())
-                if path == os.path.realpath(filename):
-                    view = v
-                    window.focus_view(v)
-                    found = True
-                    break
-        if not found:
-            #view = window.open_file(filename, sublime.TRANSIENT)
-            view = window.open_file(filename)
-        return lookup_view(view)
-
-
-def reset_current():
-    '''
-    Reset the current line marker
-    '''
-    global xdebug_current
-    if xdebug_current:
-        xdebug_current.erase_regions('xdebug_current_line')
-        xdebug_current = None
-
-
-def get_setting(key):
-    '''
-    Get an xdebug project setting.
-
-    Xdebug project settings are stored in the sublime project file
-    as a dictionary:
-
-        "xdebug": { "key": "value", ... }
-    '''
-    try:
-        for folder in sublime.active_window().folders():
-            files = os.listdir(folder)
-            for f in files:
-                if f.endswith('sublime-project'):
-                    with open(os.path.join(folder, f), 'r') as settings_file:
-                        settings = json.load(settings_file)
-                        if 'xdebug' in settings:
-                            if key in settings['xdebug']:
-                                return settings['xdebug'][key]
-    except:
-        pass
-
-
-def add_debug_info(name, data):
-    '''
-    Adds data to the debug output windows
-    '''
-    found = False
-    v = None
-    window = sublime.active_window()
-
-    if name == 'context':
-        group = 1
-        fullName = "Xdebug Context"
-    if name == 'stack':
-        group = 2
-        fullName = "Xdebug Stack"
-
-    for v in window.views():
-        if v.name() == fullName:
-            found = True
-            break
-
-    if not found:
-        v = window.new_file()
-        v.set_scratch(True)
-        v.set_read_only(True)
-        v.set_name(fullName)
-        found = True
-
-    if found:
-        v.set_read_only(False)
-        window.set_view_index(v, group, 0)
-        edit = v.begin_edit()
-        v.erase(edit, sublime.Region(0, v.size()))
-        v.insert(edit, 0, data)
-        v.end_edit(edit)
-        v.set_read_only(True)
-
-    window.focus_group(0)
+    def is_enabled(self):
+        print 'Checking enablement'
+        return True
+        #return protocol and protocol.is_connected()
