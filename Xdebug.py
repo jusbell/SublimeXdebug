@@ -7,7 +7,7 @@ import threading
 import types
 import json
 import webbrowser
-from xml.dom.minidom import parseString
+import xml.dom.minidom
 
 
 xdebug_current = None
@@ -15,6 +15,7 @@ original_layout = None
 debug_view = None
 protocol = None
 buffers = {}
+
 
 def lookup_view(v):
     '''
@@ -38,13 +39,12 @@ def show_file(window, uri):
     '''
     if window:
         window.focus_group(0)
-    transport, filename = uri.split('://', 1)
-    if filename.startswith('/C:/'):
-        filename = filename[1:]
-    print '>>>transport: ' + transport
-    print '>>>filename: ' + filename
+    if sublime.platform() == 'windows':
+        transport, filename = uri.split(':///', 1)  # scheme:///C:/path/file => scheme, C:/path/file
+    else:
+        transport, filename = uri.split('://', 1)  # scheme:///path/file => scheme, /path/file
+
     if transport == 'file' and os.path.exists(filename):
-        print '>>>showing view: ' + filename
         window = sublime.active_window()
         views = window.views()
         found = False
@@ -110,12 +110,17 @@ def add_debug_info(name, data):
     v = None
     window = sublime.active_window()
 
-    print '<<<>>> ' + data
     if name == 'context':
         group = 1
+        index = 0
         fullName = "Xdebug Context"
+    if name == 'inspect':
+        group = 1
+        index = 1
+        fullName = "Xdebug Inspect"
     if name == 'stack':
         group = 2
+        index = 0
         fullName = "Xdebug Stack"
 
     for v in window.views():
@@ -126,13 +131,15 @@ def add_debug_info(name, data):
     if not found:
         v = window.new_file()
         v.set_scratch(True)
-        v.set_read_only(True)
         v.set_name(fullName)
+        v.settings().set('word_wrap', False)
         found = True
+        if name == 'context':
+            v.set_syntax_file("Packages/SublimeXdebug/Xdebug.tmLanguage")
 
     if found:
         v.set_read_only(False)
-        window.set_view_index(v, group, 0)
+        window.set_view_index(v, group, index)
         edit = v.begin_edit()
         v.erase(edit, sublime.Region(0, v.size()))
         v.insert(edit, 0, data)
@@ -140,6 +147,8 @@ def add_debug_info(name, data):
         v.set_read_only(True)
 
     window.focus_group(0)
+    if (name == 'inspect'):
+        window.focus_view(v)
 
 
 class DebuggerException(Exception):
@@ -217,7 +226,7 @@ class Protocol(object):
     def read(self):
         data = self.read_data()
         #print '<---', data
-        document = parseString(data)
+        document = xml.dom.minidom.parseString(data)
         return document
 
     def send(self, command, *args, **kwargs):
@@ -293,7 +302,7 @@ class Protocol(object):
 
 class XdebugView(object):
     '''
-    The XdebugView is just a normal view with some convenience methods.
+    The XdebugView is sort of a normal view with some convenience methods.
 
     See lookup_view.
     '''
@@ -396,6 +405,90 @@ class XdebugView(object):
         self.center(line)
 
 
+class XdebugVariable(object):
+
+    indent = '   '
+
+    def __init__(self):
+        self.name = None
+        self.fullname = None
+        self.type = None
+        self.value = None
+        self.children = None
+        self.childCount = 0
+        self.isExpanded = False
+
+    def __str__(self, level=0):
+        out = unicode()
+
+        if level > 0:
+            out += (XdebugVariable.indent * level)
+
+        if self.type == 'array':
+            out += "%s = {%s} [%s]" % (self.name, self.type, self.childCount)
+            if self.children:
+                for child in self.children:
+                    out += '\n'
+                    out += child.__str__(level + 1)
+
+        elif self.type == 'string':
+            if self.value != None:
+                out += "%s = '%s'" % (self.name, self.value)
+            else:
+                out += "%s = ''" % (self.name)
+
+        elif self.type == 'uninitialized':
+            out += "%s = uninitialized" % (self.name)
+
+        else:
+            out += "%s = '%s'" % (self.fullname, self.value)
+
+        return out
+
+    def __repr__(self):
+        return self.__str__()
+
+    @staticmethod
+    def parseDoc(doc):
+        assert isinstance(doc, xml.dom.minidom.Document)
+        xvars = []
+        for child in doc.firstChild.childNodes:
+            if child.nodeName == 'property':
+                var = XdebugVariable.parse(child)
+                xvars.append(var)
+        return xvars
+
+    @staticmethod
+    def parse(node):
+        if isinstance(node, xml.dom.minidom.Document):
+            return XdebugVariable.parseDoc(node)
+        else:
+            assert isinstance(node, xml.dom.minidom.Element)
+
+        var = XdebugVariable()
+        var.name = unicode(node.getAttribute('name'))
+        var.fullname = unicode(node.getAttribute('fullname'))
+        var.type = unicode(node.getAttribute('type'))
+
+        if node.hasAttribute('children') and int(node.getAttribute('children')):
+            var.childCount = int(node.getAttribute('numchildren'))
+            var.children = []
+
+        if var.childCount > 0:
+            for child in node.childNodes:
+                if child.nodeName == 'property':
+                    if not var.children:
+                        var.children = []
+                    childVar = XdebugVariable.parse(child)
+                    var.children.append(childVar)
+        else:
+            try:
+                var.value = unicode(' '.join(base64.b64decode(t.data) for t in node.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
+            except:
+                var.value = unicode(' '.join(t.data for t in node.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
+        return var
+
+
 class XdebugListenCommand(sublime_plugin.TextCommand):
     '''
     Start listening for Xdebug connections
@@ -470,6 +563,7 @@ class XdebugCommand(sublime_plugin.TextCommand):
             mapping.update({
                 'xdebug_status': 'Status',
                 'xdebug_execute': 'Execute',
+                'xdebug_inspect': 'Inspect',
             })
 
         self.cmds = mapping.keys()
@@ -543,12 +637,10 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
 
         protocol.send(state)
         res = protocol.read().firstChild
-        print res.childNodes
 
         for child in res.childNodes:
-            print 'node name: ' + child.nodeName
             if child.nodeName == 'xdebug:message':
-                print '>>>break ' + child.getAttribute('filename') + ':' + child.getAttribute('lineno')
+                #print '>>>break ' + child.getAttribute('filename') + ':' + child.getAttribute('lineno')
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: breakpoint'), 0)
                 xdebug_current = show_file(self.view.window(), child.getAttribute('filename'))
                 xdebug_current.current(int(child.getAttribute('lineno')))
@@ -556,28 +648,14 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
         if (res.getAttribute('status') == 'break'):
             # TODO stack_get
             protocol.send('context_get')
-            res = protocol.read().firstChild
+            res = protocol.read()
+
+            xvars = XdebugVariable.parse(res)
+
             result = ''
+            for xvar in xvars:
+                result += xvar.__str__() + '\n'
 
-            def getValues(node):
-                result = unicode('')
-                for child in node.childNodes:
-                    if child.nodeName == 'property':
-                        propName = unicode(child.getAttribute('fullname'))
-                        propType = unicode(child.getAttribute('type'))
-                        propValue = None
-                        try:
-                            propValue = unicode(' '.join(base64.b64decode(t.data) for t in child.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
-                        except:
-                            propValue = unicode(' '.join(t.data for t in child.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
-                        if propName:
-                            if propName.lower().find('password') != -1:
-                                propValue = unicode('*****')
-                            result = result + unicode(propName + ' [' + propType + '] = ' + str(propValue) + '\n')
-                            result = result + getValues(child)
-                return result
-
-            result = getValues(res)
             add_debug_info('context', result)
 
             protocol.send('stack_get')
@@ -717,12 +795,32 @@ class EventListener(sublime_plugin.EventListener):
 
 class XdebugDoubleClick(sublime_plugin.TextCommand):
     def run(self, edit):
-        print 'here'
         row, col = self.view.rowcol(self.view.sel()[0].a)
-        print row
-        print col
 
     def is_enabled(self):
-        print 'Checking enablement'
         return True
         #return protocol and protocol.is_connected()
+
+
+class XdebugInspectCommand(sublime_plugin.TextCommand):
+    def run(self, edit):
+        for region in self.view.sel():
+            if not region.empty():
+                global protocol
+                expr = self.view.substr(region)
+                protocol.send('eval', data=expr)
+                res = protocol.read().firstChild
+                for child in res.childNodes:
+                    if child.nodeName == 'property':
+                        try:
+                            val = unicode(' '.join(base64.b64decode(t.data) for t in child.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
+                        except:
+                            val = unicode(' '.join(t.data for t in child.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
+
+                        add_debug_info('inspect', val)
+
+    def callback(self, index):
+        pass
+
+    def is_enabled(self):
+        return True
