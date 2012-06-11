@@ -1,4 +1,5 @@
 {
-	"port":9001,
-	"url": "http://your.server.here"
+	"port":9000,
+	"url": "http://localhost",
+	"break_first_line":false
 }
