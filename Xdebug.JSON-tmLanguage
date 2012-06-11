@@ -1,0 +1,32 @@
+{
+   "name":"Xdebug",
+   "scopeName":"source.xdebug",
+   "fileTypes":[
+      "xdbg",
+      "xdebug"
+   ],
+   "foldingStartMarker":"= {.*?}",
+   "patterns":[
+      {
+        "match":"\\s+\\d+",
+        "name":"constant.numeric.xdebug",
+        "comment":"Numeric values"
+      },
+      {
+      	"match":"[\"'].*?[\"']",
+      	"name":"string.xdebug",
+      	"comment":"String values"
+      },
+      {
+      	"match":"{.*?}",
+      	"name":"comment.xdebug",
+      	"comment":"varialbe type indicator"
+      },
+      {
+      	"match":"^(\\s*)?[-+1]",
+      	"name":"comment.xdebug",
+      	"comment":"varialbe type indicator"
+      }      
+   ],
+   "uuid":"26b2eef0-315f-4d93-8ef9-75b0602d7b26"
+}

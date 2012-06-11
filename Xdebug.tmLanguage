@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>fileTypes</key>
+	<array>
+		<string>xdbg</string>
+		<string>xdebug</string>
+	</array>
+	<key>foldingStartMarker</key>
+	<string>= {.*?}</string>
+	<key>name</key>
+	<string>Xdebug</string>
+	<key>patterns</key>
+	<array>
+		<dict>
+			<key>comment</key>
+			<string>Numeric values</string>
+			<key>match</key>
+			<string>\s+\d+</string>
+			<key>name</key>
+			<string>constant.numeric.xdebug</string>
+		</dict>
+		<dict>
+			<key>comment</key>
+			<string>String values</string>
+			<key>match</key>
+			<string>["'].*?["']</string>
+			<key>name</key>
+			<string>string.xdebug</string>
+		</dict>
+		<dict>
+			<key>comment</key>
+			<string>varialbe type indicator</string>
+			<key>match</key>
+			<string>{.*?}</string>
+			<key>name</key>
+			<string>comment.xdebug</string>
+		</dict>
+		<dict>
+			<key>comment</key>
+			<string>varialbe type indicator</string>
+			<key>match</key>
+			<string>^(\s*)?[-+1]</string>
+			<key>name</key>
+			<string>comment.xdebug</string>
+		</dict>
+	</array>
+	<key>scopeName</key>
+	<string>source.xdebug</string>
+	<key>uuid</key>
+	<string>26b2eef0-315f-4d93-8ef9-75b0602d7b26</string>
+</dict>
+</plist>
