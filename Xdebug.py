@@ -46,19 +46,21 @@ def show_file(window, uri):
 
     if transport == 'file' and os.path.exists(filename):
         window = sublime.active_window()
-        views = window.views()
-        found = False
-        for v in views:
-            if v.file_name():
-                path = os.path.realpath(v.file_name())
-                if path == os.path.realpath(filename):
-                    view = v
-                    window.focus_view(v)
-                    found = True
-                    break
-        if not found:
-            #view = window.open_file(filename, sublime.TRANSIENT)
-            view = window.open_file(filename)
+        if window.active_view().file_name() == filename:
+            view = window.active_view()
+        else:
+            views = window.views()
+            found = False
+            for v in views:
+                if v.file_name():
+                    path = os.path.realpath(v.file_name())
+                    if path == os.path.realpath(filename):
+                        view = v
+                        window.focus_view(v)
+                        found = True
+                        break
+            if not found:
+                view = window.open_file(filename)
         return lookup_view(view)
 
 
@@ -134,7 +136,7 @@ def add_debug_info(name, data):
         v.set_name(fullName)
         v.settings().set('word_wrap', False)
         found = True
-        if name == 'context':
+        if name == 'context' or name == 'inspect':
             v.set_syntax_file("Packages/SublimeXdebug/Xdebug.tmLanguage")
 
     if found:
@@ -170,6 +172,7 @@ class Protocol(object):
 
     read_rate = 1024
     port = get_setting('port')
+    print port
 
     def __init__(self):
         self.clear()
