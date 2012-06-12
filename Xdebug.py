@@ -89,10 +89,8 @@ def get_setting(key, default=None):
     '''
     try:
         for folder in sublime.active_window().folders():
-            #print 'Looking for sublime-project file in : ' + folder
             files = os.listdir(folder)
             for f in files:
-                #print 'File: ' + f
                 if f.endswith('sublime-project'):
                     with open(os.path.join(folder, f), 'r') as settings_file:
                         settings = json.load(settings_file)
@@ -136,8 +134,11 @@ def add_debug_info(name, data):
         v.set_name(fullName)
         v.settings().set('word_wrap', False)
         found = True
+
         if name == 'context' or name == 'inspect':
             v.set_syntax_file("Packages/SublimeXdebug/Xdebug.tmLanguage")
+            v.settings().set('fade_fold_buttons', False)
+            v.run_command("fold_all")
 
     if found:
         v.set_read_only(False)
@@ -147,6 +148,9 @@ def add_debug_info(name, data):
         v.insert(edit, 0, data)
         v.end_edit(edit)
         v.set_read_only(True)
+
+        if name == 'context' or name == 'inspect':
+            v.run_command("fold_all")
 
     window.focus_group(0)
     if (name == 'inspect'):
@@ -171,13 +175,12 @@ class Protocol(object):
     '''
 
     read_rate = 1024
-    port = get_setting('port')
-    print port
 
     def __init__(self):
-        self.clear()
+        self.stop()
+        self.port = get_setting('port')
 
-    def clear(self):
+    def stop(self):
         self.buffer = ''
         self.connected = False
         self.listening = False
@@ -259,6 +262,9 @@ class Protocol(object):
 
     def accept(self):
         serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        print 'connecting to port: '
+        print self.port
 
         if serv:
             try:
@@ -395,6 +401,7 @@ class XdebugView(object):
         return edit
 
     def on_load(self):
+        print 'Loading now'
         if self.current_line:
             self.current(self.current_line)
             self.current_line = None
@@ -558,7 +565,7 @@ class XdebugCommand(sublime_plugin.TextCommand):
         }
 
         if protocol:
-            mapping['xdebug_clear'] = 'Stop debugging'
+            mapping['xdebug_stop'] = 'Stop debugging'
         else:
             mapping['xdebug_listen'] = 'Start debugging'
 
@@ -598,7 +605,7 @@ class XdebugCommand(sublime_plugin.TextCommand):
                 "cells": [[0, 0, 2, 1], [0, 1, 1, 2], [1, 1, 2, 2]]
             })
 
-        if command == 'xdebug_clear':
+        if command == 'xdebug_stop':
             url = get_setting('url')
             if url:
                 webbrowser.open(url + '?XDEBUG_SESSION_STOP=sublime.xdebug')
@@ -676,7 +683,7 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
             add_debug_info('stack', result)
 
         if res.getAttribute('status') == 'stopping' or res.getAttribute('status') == 'stopped':
-            self.view.run_command('xdebug_clear')
+            self.view.run_command('xdebug_stop')
             self.view.run_command('xdebug_listen')
             sublime.set_timeout(lambda: sublime.status_message('Xdebug: Page finished executing. Reload to continue debugging.'), 0)
 
@@ -690,14 +697,14 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
         return False
 
 
-class XdebugClearCommand(sublime_plugin.TextCommand):
+class XdebugStopCommand(sublime_plugin.TextCommand):
     '''
     Close the socket and stop listening to xdebug
     '''
     def run(self, edit):
         global protocol
         try:
-            protocol.clear()
+            protocol.stop()
             reset_current()
         except:
             pass
@@ -762,38 +769,9 @@ class XdebugExecute(sublime_plugin.TextCommand):
 
 
 class EventListener(sublime_plugin.EventListener):
-    def on_new(self, view):
-        lookup_view(view).on_new()
-
-    def on_clone(self, view):
-        lookup_view(view).on_clone()
 
     def on_load(self, view):
         lookup_view(view).on_load()
-
-    def on_close(self, view):
-        lookup_view(view).on_close()
-
-    def on_pre_save(self, view):
-        lookup_view(view).on_pre_save()
-
-    def on_post_save(self, view):
-        lookup_view(view).on_post_save()
-
-    def on_modified(self, view):
-        lookup_view(view).on_modified()
-
-    def on_selection_modified(self, view):
-        lookup_view(view).on_selection_modified()
-
-    def on_activated(self, view):
-        lookup_view(view).on_activated()
-
-    def on_deactivated(self, view):
-        lookup_view(view).on_deactivated()
-
-    def on_query_context(self, view, key, operator, operand, match_all):
-        lookup_view(view).on_query_context(key, operator, operand, match_all)
 
 
 class XdebugDoubleClick(sublime_plugin.TextCommand):
