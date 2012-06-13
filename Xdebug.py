@@ -5,40 +5,88 @@ import socket
 import base64
 import threading
 import types
-import json
 import webbrowser
 import xml.dom.minidom
 
 
 xdebug_current = None
 original_layout = None
-debug_view = None
 protocol = None
-buffers = {}
+
+buffers = {}  # Cache for editor views
 
 
-def lookup_view(v):
-    '''
-    Convert a Sublime View into an XdebugView
-    '''
-    if isinstance(v, XdebugView):
-        return v
-    if isinstance(v, sublime.View):
-        id = v.buffer_id()
+def lookup_view(view):
+    # Check to see if its a context view, stack view, inspect view, etc.
+    if isinstance(view, str):
+        if view in buffers:
+            return buffers[view]
+
+    # Check to see if the editor view has already been created
+    if isinstance(view, XdebugView):
+        return view
+
+    # Try to resolve an xdebug view by name
+    view_id = xid(view.name())
+    if view_id in buffers:
+        return buffers[view_id]
+
+    # Is is a sublime view, if so create an editor view
+    if isinstance(view, sublime.View):
+        id = view.buffer_id()
         if id in buffers:
-            buffers[id].view = v
+            buffers[id].view = view
         else:
-            buffers[id] = XdebugView(v)
+            buffers[id] = XdebugView(view=view)
+
         return buffers[id]
+
     return None
 
 
-def show_file(window, uri):
+def xid(name=None):
+    '''
+    Convenience method for generating a xdebug view id (xid) given a view name.
+    It is assumed that the view name will start with "Xdebug"
+    '''
+    if name:
+        return name.replace("Xdebug", "").rstrip().lstrip().lower()
+    else:
+        return None
+
+
+def remote_debug_session(action='start'):
+    '''
+    Opens the browser and notifies Xdebug of start and stop commands
+    '''
+    global protocol
+    url = get_setting('url')
+    if url:
+        if action == 'start':
+            url += '?XDEBUG_SESSION_START=sublime.xdebug'
+        elif action == 'stop':
+            url += '?XDEBUG_SESSION_STOP=sublime.xdebug'
+        else:
+            url = None
+
+        if url:
+            webbrowser.open(url)
+    else:
+        sublime.set_timeout(lambda: sublime.status_message('Xdebug: No URL defined in project settings file.'), 0)
+
+
+def is_debugging():
+    global protocol
+    return protocol and protocol.connected
+
+
+def show_file(window, uri, lineno=None):
     '''
     Open or focus a window
     '''
     if window:
         window.focus_group(0)
+
     if sublime.platform() == 'windows':
         transport, filename = uri.split(':///', 1)  # scheme:///C:/path/file => scheme, C:/path/file
     else:
@@ -61,7 +109,12 @@ def show_file(window, uri):
                         break
             if not found:
                 view = window.open_file(filename)
-        return lookup_view(view)
+
+        xview = lookup_view(view)
+        if lineno != None:
+            xview.current(int(lineno))
+
+        return xview
 
 
 def reset_current():
@@ -69,92 +122,21 @@ def reset_current():
     Reset the current line marker
     '''
     global xdebug_current
+    print 'Resetting current...'
     if xdebug_current:
+        print 'we got a current'
         xdebug_current.erase_regions('xdebug_current_line')
         xdebug_current = None
 
 
 def get_setting(key, default=None):
-    '''
-    Get an xdebug setting, settings are resolved by first looking in the
-    sublime project file if it exists.
-
-    Xdebug project settings are stored in the sublime project file
-    as a dictionary:
-
-        "xdebug": { "key": "value", ... }
-
-    If the setting is not found in the project file, the plugin will look
-    into the sublime plugin settings file
-    '''
     try:
-        for folder in sublime.active_window().folders():
-            files = os.listdir(folder)
-            for f in files:
-                if f.endswith('sublime-project'):
-                    with open(os.path.join(folder, f), 'r') as settings_file:
-                        settings = json.load(settings_file)
-                        if 'xdebug' in settings:
-                            if key in settings['xdebug']:
-                                return settings['xdebug'][key]
-            return sublime.load_settings("SublimeXdebug.sublime-settings").get(key, default)
+        settings = sublime.active_window().active_view().settings()
+        if settings.has("xdebug_%s" % key):
+            return settings.get("xdebug_%s" % key)
     except:
         pass
-
-
-def add_debug_info(name, data):
-    '''
-    Adds data to the debug output windows
-    '''
-    found = False
-    v = None
-    window = sublime.active_window()
-
-    if name == 'context':
-        group = 1
-        index = 0
-        fullName = "Xdebug Context"
-    if name == 'inspect':
-        group = 1
-        index = 1
-        fullName = "Xdebug Inspect"
-    if name == 'stack':
-        group = 2
-        index = 0
-        fullName = "Xdebug Stack"
-
-    for v in window.views():
-        if v.name() == fullName:
-            found = True
-            break
-
-    if not found:
-        v = window.new_file()
-        v.set_scratch(True)
-        v.set_name(fullName)
-        v.settings().set('word_wrap', False)
-        found = True
-
-        if name == 'context' or name == 'inspect':
-            v.set_syntax_file("Packages/SublimeXdebug/Xdebug.tmLanguage")
-            v.settings().set('fade_fold_buttons', False)
-            v.run_command("fold_all")
-
-    if found:
-        v.set_read_only(False)
-        window.set_view_index(v, group, index)
-        edit = v.begin_edit()
-        v.erase(edit, sublime.Region(0, v.size()))
-        v.insert(edit, 0, data)
-        v.end_edit(edit)
-        v.set_read_only(True)
-
-        if name == 'context' or name == 'inspect':
-            v.run_command("fold_all")
-
-    window.focus_group(0)
-    if (name == 'inspect'):
-        window.focus_view(v)
+    return sublime.load_settings("SublimeXdebug.sublime-settings").get(key, default)
 
 
 class DebuggerException(Exception):
@@ -179,17 +161,25 @@ class Protocol(object):
     def __init__(self):
         self.stop()
         self.port = get_setting('port')
+        self.listeners = {
+            'start': [],
+            'stop': []
+        }
 
     def stop(self):
         self.buffer = ''
         self.connected = False
         self.listening = False
         self.server = None
+        self.address = None
         del self.transaction_id
         try:
             self.sock.close()
+            for listener in self.listeners['stop']:
+                listener()
         except:
             pass
+
         self.sock = None
 
     def transaction_id():
@@ -219,7 +209,7 @@ class Protocol(object):
                 self.buffer += self.sock.recv(self.read_rate)
                 return self.read_until_null()
         else:
-            raise(ProtocolConnectionException, "Not Connected")
+            raise ProtocolConnectionException("Xdebug is not connected")
 
     def read_data(self):
         length = self.read_until_null()
@@ -227,7 +217,7 @@ class Protocol(object):
         if int(length) == len(message):
             return message
         else:
-            raise(ProtocolException, "Length mismatch")
+            raise ProtocolException("Length mismatch encountered while reading the xdebug message")
 
     def read(self):
         data = self.read_data()
@@ -258,14 +248,11 @@ class Protocol(object):
             self.sock.send(command + '\x00')
             #print '--->', command
         except Exception, x:
-            raise(ProtocolConnectionException, x)
+            raise ProtocolConnectionException(str(x))
 
     def accept(self):
         serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        print 'connecting to port: '
-        print self.port
-
+        print 'Created server socket: ' + str(serv)
         if serv:
             try:
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: Waiting for connection'), 0)
@@ -273,20 +260,31 @@ class Protocol(object):
                 serv.settimeout(1)
                 serv.bind(('', self.port))
                 serv.listen(1)
+
                 self.listening = True
                 self.sock = None
+                print 'Server socket listening on port: ' + str(self.port)
+
             except Exception, x:
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: Could not initialize port'), 0)
-                raise(ProtocolConnectionException, x)
+                raise ProtocolConnectionException('Could not initialize port ' + str(x))
+
+            if self.listening:
+                for listener in self.listeners['start']:
+                    listener()
 
             while self.listening:
                 try:
-                    self.sock, address = serv.accept()
+                    print 'Trying server.accept()...'
+                    self.sock, self.address = serv.accept()
+                    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    print 'Connection accepted [%s, %s]' % (str(self.sock), str(self.address))
                     sublime.set_timeout(lambda: sublime.status_message('Xdebug: Connected'), 0)
                     self.listening = False
                 except socket.timeout:
                     pass
 
+            print 'Socket: ' + str(self.sock)
             if self.sock:
                 self.connected = True
                 self.sock.settimeout(None)
@@ -295,124 +293,94 @@ class Protocol(object):
                 self.listening = False
 
             try:
+                print 'Closing server connection...'
                 serv.close()
                 serv = None
             except:
                 pass
+
+            print 'Returning Socket ' + str(self.sock)
             return self.sock
         else:
             raise ProtocolConnectionException('Could not create socket')
 
-    def is_connected():
-        if protocol and protocol.connected:
-            return True
-        return False
+    def add_listener(self, on_type, fn):
+        if fn:
+            self.listeners[on_type].append(fn)
+
+    def __str__(self):
+        return '<Xdebug.Protocol {connected:%s, listening:%s, address:%s}' % (str(self.connected), str(self.listening), str(self.address))
 
 
-class XdebugView(object):
-    '''
-    The XdebugView is sort of a normal view with some convenience methods.
+class XdebugResponse():
 
-    See lookup_view.
-    '''
-    def __init__(self, view):
-        self.view = view
-        self.current_line = None
-        self.breaks = {}  # line : meta { id: bleh }
-
-    def __getattr__(self, attr):
-        if hasattr(self.view, attr):
-            return getattr(self.view, attr)
-        if attr.startswith('on_'):
-            return self
-        raise(AttributeError, "%s does not exist" % attr)
-
-    def __call__(self, *args, **kwargs):
-        pass
-
-    def center(self, lineno):
-        line = self.lines(lineno)[0]
-        self.view.show_at_center(line)
-
-    def add_breakpoint(self, row):
-        if not row in self.breaks:
-            self.breaks[row] = {}
-            if protocol and protocol.connected:
-                protocol.send('breakpoint_set', t='line', f=self.uri(), n=row)
-                res = protocol.read().firstChild
-                self.breaks[row]['id'] = res.getAttribute('id')
-
-    def del_breakpoint(self, row):
-        if row in self.breaks:
-            if protocol and protocol.connected:
-                protocol.send('breakpoint_remove', d=self.breaks[row]['id'])
-            del self.breaks[row]
-
-    def view_breakpoints(self):
-        self.view.add_regions('dbgp_breakpoints', self.lines(self.breaks.keys()), 'dbgp.breakpoint', 'dot', sublime.HIDDEN)
-
-    def breakpoint_init(self):
-        if not self.breaks:
-            return
-        uri = self.uri()
-        for row in self.breaks:
-            protocol.send('breakpoint_set', t='line', f=uri, n=row)
-            res = protocol.read().firstChild
-            self.breaks[row]['id'] = res.getAttribute('id')
-
-    def breakpoint_clear(self):
-        if not self.breaks:
-            return
-        for row in self.breaks.keys():
-            self.del_breakpoint(row)
-
-    def uri(self):
-        return 'file://' + os.path.realpath(self.view.file_name())
-
-    def lines(self, data=None):
-        lines = []
-        if data is None:
-            regions = self.view.sel()
+    @staticmethod
+    def get_root(doc):
+        if isinstance(doc, xml.dom.minidom.Document):
+            return doc.firstChild
         else:
-            if type(data) != types.ListType:
-                data = [data]
-            regions = []
-            for item in data:
-                if type(item) == types.IntType or item.isdigit():
-                    regions.append(self.view.line(self.view.text_point(int(item) - 1, 0)))
-                else:
-                    regions.append(item)
-        for region in regions:
-            lines.extend(self.view.split_by_newlines(region))
-        return [self.view.line(line) for line in lines]
+            return doc
 
-    def rows(self, lines):
-        if not type(lines) == types.ListType:
-            lines = [lines]
-        return [self.view.rowcol(line.begin())[0] + 1 for line in lines]
+    @staticmethod
+    def get_breakpoint_id(doc):
+        return XdebugResponse.get_root(doc).getAttribute('id')
 
-    def append(self, content, edit=None, end=False):
-        if not edit:
-            edit = self.view.begin_edit()
-            end = True
-        self.view.insert(edit, self.view.size(), content + "\n")
-        if end:
-            self.view.end_edit(edit)
-        return edit
+    @staticmethod
+    def get_stack(doc):
+        stack = []
+        for node in XdebugResponse.get_root(doc).childNodes:
+            if node.nodeName == 'stack':
+                frame = XdebugStackElement()
+                frame.where = node.getAttribute('where')
+                frame.level = node.getAttribute('level')
+                frame.type = node.getAttribute('type')
+                frame.uri = node.getAttribute('filename')
+                frame.lineno = node.getAttribute('lineno')
 
-    def on_load(self):
-        print 'Loading now'
-        if self.current_line:
-            self.current(self.current_line)
-            self.current_line = None
+                stack.append(frame)
 
-    def current(self, line):
-        if self.is_loading():
-            self.current_line = line
-            return
-        region = self.lines(line)
-        self.add_regions('xdebug_current_line', region, 'xdebug.current_line', 'bookmark', sublime.HIDDEN)
-        self.center(line)
+        return stack
+
+    @staticmethod
+    def get_doc_variables(doc):
+        assert isinstance(doc, xml.dom.minidom.Document)
+        xvars = []
+        for child in doc.firstChild.childNodes:
+            if child.nodeName == 'property':
+                var = XdebugResponse.get_variables(child)
+                xvars.append(var)
+        return xvars
+
+    @staticmethod
+    def get_variables(node):
+        if isinstance(node, xml.dom.minidom.Document):
+            return XdebugResponse.get_doc_variables(node)
+        else:
+            assert isinstance(node, xml.dom.minidom.Element)
+
+        var = XdebugVariable()
+        var.name = unicode(node.getAttribute('name'))
+        var.fullname = unicode(node.getAttribute('fullname'))
+        var.type = unicode(node.getAttribute('type'))
+
+        if node.hasAttribute('children') and int(node.getAttribute('children')):
+            var.childCount = int(node.getAttribute('numchildren'))
+            var.children = []
+
+        if var.childCount > 0:
+            for child in node.childNodes:
+                if child.nodeName == 'property':
+                    if not var.children:
+                        var.children = []
+                    childVar = XdebugResponse.get_variables(child)
+                    var.children.append(childVar)
+        else:
+            try:
+                var.value = unicode(' '.join(base64.b64decode(t.data) for t in node.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
+            except:
+                var.value = unicode(' '.join(t.data for t in node.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
+
+        return var
 
 
 class XdebugVariable(object):
@@ -426,7 +394,6 @@ class XdebugVariable(object):
         self.value = None
         self.children = None
         self.childCount = 0
-        self.isExpanded = False
 
     def __str__(self, level=0):
         out = unicode()
@@ -455,48 +422,347 @@ class XdebugVariable(object):
 
         return out
 
-    def __repr__(self):
-        return self.__str__()
+    def __repr__(self, level=0):
+        return self.__str__(level)
 
-    @staticmethod
-    def parseDoc(doc):
-        assert isinstance(doc, xml.dom.minidom.Document)
-        xvars = []
-        for child in doc.firstChild.childNodes:
-            if child.nodeName == 'property':
-                var = XdebugVariable.parse(child)
-                xvars.append(var)
-        return xvars
 
-    @staticmethod
-    def parse(node):
-        if isinstance(node, xml.dom.minidom.Document):
-            return XdebugVariable.parseDoc(node)
+class XdebugStackElement(object):
+
+    template = '{level:>3}: {type:<10} {where:<10} {uri}:{lineno}'
+
+    def __init__(self):
+        self.level = None
+        self.type = None
+        self.lineno = None
+        self.uri = None
+        self.where = None
+
+    def __str__(self):
+        return unicode(XdebugStackElement.template.format(level=self.level, type=self.type, where=self.where, lineno=self.lineno, uri=self.uri))
+
+
+class XdebugView(object):
+    '''
+    The XdebugView is a normal sublime view with some convenience methods.
+    '''
+    def __init__(self, view=None, name=None):
+        self.view = view
+        self.name = name
+        self.is_open = False
+        self.xid = xid(name)
+        self.current_line = None
+        self.auto_open = get_setting("%s_view_open" % self.xid, False)
+
+    def __getattr__(self, attr):
+        if hasattr(self.view, attr):
+            return getattr(self.view, attr)
+        if attr.startswith('on_'):
+            return self
+        raise(AttributeError, "Attribute does not exist: %s" % attr)
+
+    def __call__(self, *args, **kwargs):
+        pass
+
+    def is_auto_open(self):
+        return self.auto_open
+
+    def open(self):
+        if self.view == None or self.view.window() == None:
+            self.create()
+
+        self.is_open = True
+
+    def close(self):
+        if self.view:
+            sublime.active_window().focus_view(self.view)
+            sublime.active_window().run_command("close")
+            self.view = None
+            self.is_open = False
+
+    def create(self):
+        # Check to see if the view is already opened... maybe left over from another session
+        window = sublime.active_window()
+        for view in window.views():
+            if xid(view.name()) == self.xid:
+                self.view = view
+                break
+
+        # Create view if not found
+        if not self.view:
+            self.view = window.new_file()
+
+        self.view.set_scratch(True)
+        self.view.set_name(self.name)
+        self.view.settings().set('command_mode', False)
+        self.view.settings().set('word_wrap', False)
+
+        if self.name != None:
+            self.view.set_name(self.name)
+
+        index = get_setting("%s_view_index" % self.xid, 0)
+        group = get_setting("%s_view_group" % self.xid, 0)
+
+        window.set_view_index(self.view, group, index)
+        print 'View %s init at window location [group=%s, index=%s]' % (self.name, group, index)
+
+    def center(self, lineno):
+        line = self.lines(lineno)[0]
+        self.view.show_at_center(line)
+
+    def clear(self):
+        self.view.set_read_only(False)
+        e = self.view.begin_edit()
+        self.view.erase(e, sublime.Region(0, self.view.size()))
+        self.view.end_edit(e)
+        self.view.set_read_only(True)
+
+    def uri(self):
+        return 'file://' + os.path.realpath(self.view.file_name())
+
+    def lines(self, data=None):
+        lines = []
+        if data is None:
+            regions = self.view.sel()
         else:
-            assert isinstance(node, xml.dom.minidom.Element)
+            if type(data) != types.ListType:
+                data = [data]
+            regions = []
+            for item in data:
+                if type(item) == types.IntType or item.isdigit():
+                    regions.append(self.view.line(self.view.text_point(int(item) - 1, 0)))
+                else:
+                    regions.append(item)
+        for region in regions:
+            lines.extend(self.view.split_by_newlines(region))
+        return [self.view.line(line) for line in lines]
 
-        var = XdebugVariable()
-        var.name = unicode(node.getAttribute('name'))
-        var.fullname = unicode(node.getAttribute('fullname'))
-        var.type = unicode(node.getAttribute('type'))
+    def rows(self, lines=None):
+        if not lines:
+            lines = self.lines()
+        if not type(lines) == types.ListType:
+            lines = [lines]
+        return [self.view.rowcol(line.begin())[0] + 1 for line in lines]
 
-        if node.hasAttribute('children') and int(node.getAttribute('children')):
-            var.childCount = int(node.getAttribute('numchildren'))
-            var.children = []
+    def append(self, content, edit=None, end=False):
+        if not edit:
+            edit = self.view.begin_edit()
+            end = True
+        self.view.insert(edit, self.view.size(), content + "\n")
+        if end:
+            self.view.end_edit(edit)
+        return edit
 
-        if var.childCount > 0:
-            for child in node.childNodes:
-                if child.nodeName == 'property':
-                    if not var.children:
-                        var.children = []
-                    childVar = XdebugVariable.parse(child)
-                    var.children.append(childVar)
+    def on_load(self):
+        if self.current_line:
+            self.current(self.current_line)
+            self.current_line = None
+
+    def current(self, line):
+        if self.is_loading():
+            self.current_line = line
+            return
+        region = self.lines(line)
+        self.add_regions('xdebug_current_line', region, 'xdebug.current_line', 'bookmark', sublime.HIDDEN)
+        self.center(line)
+
+    def update(self, raw):
+        if not self.is_open:
+            return
+
+        self.clear()
+        self.view.set_read_only(False)
+
+        edit = self.view.begin_edit()
+
+        if isinstance(raw, list):
+            raw = '\n'.join(str(v) for v in raw)
+        if isinstance(raw, XdebugVariable):
+            raw = raw.__str__()
+
+        self.view.insert(edit, 0, raw)
+        self.view.end_edit(edit)
+        self.view.set_read_only(True)
+
+
+class XdebugBreakpoint(object):
+
+    def __init__(self, uri, line):
+        self.line = int(line)
+        self.uri = uri
+        self.id = None
+        self.set = False
+        self.add()
+
+    def is_set(self):
+        return self.set
+
+    def add(self):
+        if is_debugging():
+            protocol.send('breakpoint_set', t='line', f=self.uri, n=self.line)
+            res = protocol.read()
+            self.id = XdebugResponse.get_breakpoint_id(res)
+            self.set = True if self.id else False
+            print 'Breakpoint set: %s' % self.__str__()
+        return self.set
+
+    def remove(self):
+        if is_debugging():
+            protocol.send('breakpoint_remove', d=self.id)
+            print 'Breakpoint remove: %s' % self.__str__()
+            return True
         else:
-            try:
-                var.value = unicode(' '.join(base64.b64decode(t.data) for t in node.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
-            except:
-                var.value = unicode(' '.join(t.data for t in node.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
-        return var
+            return False
+
+    def __str__(self):
+        return "%s : [line:%d]" % (os.path.basename(self.uri), self.line)
+
+
+class XdebugBreakpointView(XdebugView):
+
+    def __init__(self, name=None):
+        super(XdebugBreakpointView, self).__init__(name=name)
+        self.breaks = {}
+        if self.is_open:
+            self.clear()
+
+    def remove_all_breakpoints(self):
+        if self.is_open:
+            super(XdebugBreakpointView, self).clear()
+
+        print 'clearing breaks: ' + str(self.breaks)
+
+        if self.breaks:
+            for uri in self.breaks:
+                for line in self.breaks[uri]:
+                    self.breaks[uri][line].remove()
+
+        self.breaks = {}
+        self.update_view_markers()
+        self.update()
+
+        print 'breaks cleared: ' + str(self.breaks)
+
+    def on_connect(self):
+        print 'On Connect, checking for brekapoints...'
+        if self.has_breakpoints():
+            for uri in self.breaks:
+                for line in self.breaks[uri]:
+                    print 'breakpoint found at: ' + str(self.breaks[uri][line])
+                    self.breaks[uri][line].add()
+
+    def add_breakpoint(self, uri, line):
+        bp = XdebugBreakpoint(uri, line)
+        if not uri in self.breaks:
+            self.breaks[uri] = {}
+        self.breaks[uri][line] = bp
+
+    def remove_breakpoint(self, uri, line):
+        bp = self.find_breakpoints(uri, line)
+        if bp:
+            bp.remove()
+            del self.breaks[uri][line]
+
+    def find_breakpoint_lines(self, uri):
+        if uri in self.breaks:
+            return self.breaks[uri].keys()
+
+    def find_breakpoints(self, uri, line=None):
+        if line == None and uri in self.breaks:
+            return self.breaks[uri].values()
+        elif line and line in self.breaks[uri]:
+            return self.breaks[uri][line]
+        else:
+            return None
+
+    def update_view_markers(self, view=None):
+        if view == None:
+            view = sublime.active_window().active_view()
+
+        xview = lookup_view(view)
+        found = self.find_breakpoint_lines(xview.uri())
+        xview.erase_regions('dbgp_breakpoints')
+        if found:
+            xview.add_regions('dbgp_breakpoints', xview.lines(found), 'dbgp.breakpoint', 'dot', sublime.HIDDEN)
+
+    def update(self):
+        if self.is_open and self.breaks:
+            print 'Update breakpoint view'
+            out = []
+            for uri in self.breaks:
+                for line in self.breaks[uri]:
+                    out.append(str(self.breaks[uri][line]))
+
+            super(XdebugBreakpointView, self).update(out)
+
+    def has_breakpoints(self, uri=None, line=None):
+        if uri == None and line == None:
+            return self.breaks and len(self.breaks) > 0
+        elif line == None and uri in self.breaks:
+            return len(self.breaks[uri]) > 0
+        elif uri in self.breaks and line in self.breaks[uri]:
+            return self.breaks[uri][line] != None
+        else:
+            return False
+
+
+class XdebugVariableView(XdebugView):
+
+    def __init__(self, name=None):
+        super(XdebugVariableView, self).__init__(name=name)
+        self.vars = None
+
+    def create(self):
+        super(XdebugVariableView, self).create()
+        self.view.set_syntax_file("Packages/SublimeXdebug/Xdebug.tmLanguage")
+        self.view.settings().set('fade_fold_buttons', False)
+
+    def update(self, data=None):
+        if isinstance(data, xml.dom.minidom.Document) or isinstance(data, xml.dom.minidom.Element):
+            data = XdebugResponse.get_variables(data)
+
+        super(XdebugVariableView, self).update(data)
+        self.view.run_command("fold_all")
+
+
+class XdebugInspectView(XdebugVariableView):
+
+    def __init__(self, name):
+        super(XdebugInspectView, self).__init__(name=name)
+        self.expression = None
+
+    def update(self, data=None, expr=None):
+        if isinstance(data, xml.dom.minidom.Document) or isinstance(data, xml.dom.minidom.Element):
+            data = XdebugResponse.get_variables(data)
+            data = data[0]
+            data.name = expr
+
+        super(XdebugInspectView, self).update(data)
+
+
+class XdebugStackView(XdebugView):
+
+    def __init__(self, name):
+        super(XdebugStackView, self).__init__(name=name)
+        self.stack = []
+
+    def update(self, data=None):
+        if isinstance(data, xml.dom.minidom.Document) or isinstance(data, xml.dom.minidom.Element):
+            data = XdebugResponse.get_stack(data)
+            self.stack = data
+
+        super(XdebugStackView, self).update(data)
+
+
+# Create single instance views
+buffers['context'] = XdebugVariableView("Xdebug Context")
+buffers['stack'] = XdebugStackView("Xdebug Stack")
+buffers['inspect'] = XdebugInspectView("Xdebug Inspect")
+buffers['breakpoints'] = XdebugBreakpointView("Xdebug Breakpoints")
+
+
+'''
+================================== SublimeXdebug Commands ==================================
+'''
 
 
 class XdebugListenCommand(sublime_plugin.TextCommand):
@@ -504,23 +770,50 @@ class XdebugListenCommand(sublime_plugin.TextCommand):
     Start listening for Xdebug connections
     '''
     def run(self, edit):
-        global protocol
+        global protocol, original_layout
+
         protocol = Protocol()
+        # Add a listener on xdebug start, sublime.set_timeout brings executing of the method
+        # back to thedisplay thread
+        protocol.add_listener('start', lambda: sublime.set_timeout(self.connect_callback, 0))
 
         threading.Thread(target=self.thread_callback).start()
 
     def thread_callback(self):
         protocol.accept()
-        if protocol and protocol.connected:
+        if is_debugging():
             sublime.set_timeout(self.gui_callback, 0)
 
-    def gui_callback(self):
-        init = protocol.read().firstChild
-        uri = init.getAttribute('fileuri')
-        show_file(self.view.window(), uri)
+    def connect_callback(self):
+        global original_layout
+        remote_debug_session('start')
 
+        window = sublime.active_window()
+        original_layout = window.get_layout()
+        window.set_layout(get_setting('view_layout', {
+            "cols": [0.0, 0.5, 1.0],
+            "rows": [0.0, 0.7, 1.0],
+            "cells": [
+                [0, 0, 2, 1],
+                [0, 1, 1, 2],
+                [1, 1, 2, 2]
+            ]
+        }))
+
+        # Open all auto open views on xdebugger start
         for view in buffers.values():
-            view.breakpoint_init()
+            if view.xid and view.is_auto_open():
+                view.open()
+
+    def gui_callback(self):
+        # Dump the first xdebug message...
+        protocol.read()
+        # uri = init.getAttribute('fileuri')
+        # show_file(self.view.window(), uri)
+
+        bp_view = lookup_view('breakpoints')
+        if bp_view and bp_view.has_breakpoints():
+            bp_view.on_connect()
 
         self.view.run_command('xdebug_continue', {'state': 'run'})
 
@@ -532,12 +825,13 @@ class XdebugListenCommand(sublime_plugin.TextCommand):
 
 class XdebugClearAllBreakpointsCommand(sublime_plugin.TextCommand):
     '''
-    Clear breakpoints in all open buffers
+    Clear all breakpoints
     '''
     def run(self, edit):
-        for view in buffers.values():
-            view.breakpoint_clear()
-            view.view_breakpoints()
+        bp_view = lookup_view('breakpoints')
+        if bp_view:
+            bp_view.remove_all_breakpoints()
+        bp_view.update()
 
 
 class XdebugBreakpointCommand(sublime_plugin.TextCommand):
@@ -545,13 +839,17 @@ class XdebugBreakpointCommand(sublime_plugin.TextCommand):
     Toggle a breakpoint
     '''
     def run(self, edit):
-        view = lookup_view(self.view)
-        for row in view.rows(view.lines()):
-            if row in view.breaks:
-                view.del_breakpoint(row)
+        xview = lookup_view(self.view)
+        bp_view = lookup_view('breakpoints')
+
+        for row in xview.rows(xview.lines()):
+            if bp_view.has_breakpoints(xview.uri(), row):
+                bp_view.remove_breakpoint(xview.uri(), row)
             else:
-                view.add_breakpoint(row)
-        view.view_breakpoints()
+                bp_view.add_breakpoint(xview.uri(), row)
+
+        bp_view.update_view_markers(xview)
+        bp_view.update()
 
 
 class XdebugCommand(sublime_plugin.TextCommand):
@@ -569,7 +867,7 @@ class XdebugCommand(sublime_plugin.TextCommand):
         else:
             mapping['xdebug_listen'] = 'Start debugging'
 
-        if protocol and protocol.connected:
+        if is_debugging():
             mapping.update({
                 'xdebug_status': 'Status',
                 'xdebug_execute': 'Execute',
@@ -586,33 +884,6 @@ class XdebugCommand(sublime_plugin.TextCommand):
 
         command = self.cmds[index]
         self.view.run_command(command)
-
-        if protocol and command == 'xdebug_listen':
-            url = get_setting('url')
-            if url:
-                webbrowser.open(url + '?XDEBUG_SESSION_START=sublime.xdebug')
-            else:
-                sublime.set_timeout(lambda: sublime.status_message('Xdebug: No URL defined in project settings file.'), 0)
-
-            global original_layout
-            global debug_view
-            window = sublime.active_window()
-            original_layout = window.get_layout()
-            debug_view = window.active_view()
-            window.set_layout({
-                "cols": [0.0, 0.5, 1.0],
-                "rows": [0.0, 0.7, 1.0],
-                "cells": [[0, 0, 2, 1], [0, 1, 1, 2], [1, 1, 2, 2]]
-            })
-
-        if command == 'xdebug_stop':
-            url = get_setting('url')
-            if url:
-                webbrowser.open(url + '?XDEBUG_SESSION_STOP=sublime.xdebug')
-            else:
-                sublime.set_timeout(lambda: sublime.status_message('Xdebug: No URL defined in project settings file.'), 0)
-            window = sublime.active_window()
-            window.set_layout(original_layout)
 
 
 class XdebugContinueCommand(sublime_plugin.TextCommand):
@@ -642,45 +913,29 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
         if type(state) == int:
             state = self.states.keys()[state]
 
-        global xdebug_current
         reset_current()
 
         protocol.send(state)
         res = protocol.read().firstChild
 
-        for child in res.childNodes:
-            if child.nodeName == 'xdebug:message':
-                #print '>>>break ' + child.getAttribute('filename') + ':' + child.getAttribute('lineno')
-                sublime.set_timeout(lambda: sublime.status_message('Xdebug: breakpoint'), 0)
-                xdebug_current = show_file(self.view.window(), child.getAttribute('filename'))
-                xdebug_current.current(int(child.getAttribute('lineno')))
+        for node in res.childNodes:
+            if node.nodeName == 'xdebug:message':
+                global xdebug_current
+                filename = node.getAttribute('filename')
+                lineno = int(node.getAttribute('lineno'))
+
+                xdebug_current = show_file(self.view.window(), filename, lineno)
+                sublime.set_timeout(lambda: sublime.status_message('Xdebug breakpoint: %s:%d ' % (filename, int(lineno))), 0)
 
         if (res.getAttribute('status') == 'break'):
-            # TODO stack_get
+
             protocol.send('context_get')
-            res = protocol.read()
-
-            xvars = XdebugVariable.parse(res)
-
-            result = ''
-            for xvar in xvars:
-                result += xvar.__str__() + '\n'
-
-            add_debug_info('context', result)
+            doc = protocol.read()
+            lookup_view('context').update(doc)
 
             protocol.send('stack_get')
-            res = protocol.read().firstChild
-            result = unicode('')
-            for child in res.childNodes:
-                if child.nodeName == 'stack':
-                    propWhere = child.getAttribute('where')
-                    propLevel = child.getAttribute('level')
-                    propType = child.getAttribute('type')
-                    propFile = child.getAttribute('filename')
-                    propLine = child.getAttribute('lineno')
-                    result = result + unicode('{level:>3}: {type:<10} {where:<10} {filename}:{lineno}\n' \
-                                              .format(level=propLevel, type=propType, where=propWhere, lineno=propLine, filename=propFile))
-            add_debug_info('stack', result)
+            doc = protocol.read()
+            lookup_view('stack').update(doc)
 
         if res.getAttribute('status') == 'stopping' or res.getAttribute('status') == 'stopped':
             self.view.run_command('xdebug_stop')
@@ -688,7 +943,7 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
             sublime.set_timeout(lambda: sublime.status_message('Xdebug: Page finished executing. Reload to continue debugging.'), 0)
 
     def is_enabled(self):
-        if protocol and protocol.connected:
+        if is_debugging():
             return True
         if protocol:
             sublime.set_timeout(lambda: sublime.status_message('Xdebug: Waiting for executing to start'), 0)
@@ -703,11 +958,22 @@ class XdebugStopCommand(sublime_plugin.TextCommand):
     '''
     def run(self, edit):
         global protocol
+        global original_layout
         try:
+            remote_debug_session('stop')
             protocol.stop()
             reset_current()
+
+            for view in buffers:
+                if buffers[view].xid:
+                    print 'closing view %s' % view
+                    buffers[view].close()
+
+            sublime.active_window().set_layout(original_layout)
+
         except:
             pass
+
         finally:
             protocol = None
 
@@ -727,9 +993,7 @@ class XdebugStatus(sublime_plugin.TextCommand):
         sublime.status_message(res.getAttribute('reason') + ': ' + res.getAttribute('status'))
 
     def is_enabled(self):
-        if protocol and protocol.connected:
-            return True
-        return False
+        return is_debugging()
 
 
 class XdebugExecute(sublime_plugin.TextCommand):
@@ -741,9 +1005,7 @@ class XdebugExecute(sublime_plugin.TextCommand):
             self.on_done, self.on_change, self.on_cancel)
 
     def is_enabled(self):
-        if protocol and protocol.connected:
-            return True
-        return False
+        return is_debugging()
 
     def on_done(self, line):
         if ' ' in line:
@@ -776,32 +1038,60 @@ class EventListener(sublime_plugin.EventListener):
 
 class XdebugDoubleClick(sublime_plugin.TextCommand):
     def run(self, edit):
-        row, col = self.view.rowcol(self.view.sel()[0].a)
+        print "Executing click command"
+        print 'Sublime View: ' + str(self.view) + ' ' + self.view.name()
+        xview = lookup_view(self.view)
+        print 'XView View: ' + str(xview)
+
+        def get_first_row():
+            rows = xview.rows()
+            if len(rows) > 0:
+                return rows[0]
+
+        print 'xid: ' + xview.xid
+
+        if xview.xid == 'breakpoints':
+            row = get_first_row()
+            bp = xview.breaks[row - 1]
+            if bp:
+                show_file(self.view.window(), bp.uri)
+
+        elif xview.xid == 'stack':
+            print "In stack..."
+            row = get_first_row()
+            stack = xview.stack[row - 1]
+            if stack:
+                show_file(self.view.window(), stack.uri, stack.lineno)
 
     def is_enabled(self):
-        return True
-        #return protocol and protocol.is_connected()
+        return is_debugging()
 
 
 class XdebugInspectCommand(sublime_plugin.TextCommand):
     def run(self, edit):
         for region in self.view.sel():
             if not region.empty():
-                global protocol
                 expr = self.view.substr(region)
                 protocol.send('eval', data=expr)
-                res = protocol.read().firstChild
-                for child in res.childNodes:
-                    if child.nodeName == 'property':
-                        try:
-                            val = unicode(' '.join(base64.b64decode(t.data) for t in child.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
-                        except:
-                            val = unicode(' '.join(t.data for t in child.childNodes if t.nodeType == t.TEXT_NODE or t.nodeType == t.CDATA_SECTION_NODE))
 
-                        add_debug_info('inspect', val)
+                doc = protocol.read()
+                lookup_view('inspect').update(doc, expr)
 
     def callback(self, index):
         pass
 
     def is_enabled(self):
-        return True
+        return is_debugging()
+
+
+class XdebugOpenBreakpointView(sublime_plugin.WindowCommand):
+    def run(self):
+        bp_view = lookup_view('breakpoints')
+        bp_view.open()
+        bp_view.update()
+
+    def is_enabled(self):
+        return not lookup_view('breakpoints').is_open
+
+    def is_visible(self):
+        return not lookup_view('breakpoints').is_open

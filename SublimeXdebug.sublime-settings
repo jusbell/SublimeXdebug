@@ -1,5 +1,56 @@
 {
+    // All settings can be specified in a sublime project file. In the sublime project file.
+    // In the prject file, xdebug settings must has "xdebug_" prepended to the setting name.
+    // For example:
+    //
+    // "settings":
+    // {
+    //      "xdebug_port": 9000,
+    //      "xdebug_url": "http://localhost",
+    //      ...
+    // }
+
+	// Default Xdebug listen port
 	"port":9000,
+
+	// Default server url
 	"url": "http://localhost",
-	"break_first_line":false
+
+	// Xdebug window layout, 2 rows, with the second row containing two cols or equal width
+	"view_layout":{
+        "cols": [0.0, 0.5, 1.0],
+        "rows": [0.0, 0.7, 1.0],
+        "cells": [[0, 0, 2, 1], [0, 1, 1, 2], [1, 1, 2, 2]]
+    },
+
+    // Placement of context (variables) view -- bottom row, first cell, first window
+	"context_view_group":1,
+	"context_view_index":0,
+	// Auto-open on start of xdebug session
+	"context_view_open":true,
+
+
+	// Placement of stack view -- bottom row, second cell, first window
+	"stack_view_group":2,
+	"stack_view_index":0,
+	// Auto-open on start of xdebug session?
+	"stack_view_open":true,
+
+
+	// Placement of inspect view -- bottom row, first cell, second window
+	"inspect_view_group":1,
+	"inspect_view_index":1,
+	// Auto-open on start of xdebug session?
+	"inspect_view_open":false,
+
+
+	// Placement of inspect view -- bottom row, second cell, second window
+	"breakpoints_view_group":2,
+	"breakpoints_view_index":1,
+	// Auto-open on start of xdebug session?
+	"breakpoints_view_open":false,
+
+
+	// If true, file paths will be displayed relative to the current project's root directory
+	"project_relative_paths":true
 }

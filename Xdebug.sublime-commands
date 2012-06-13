@@ -1,0 +1,6 @@
+[
+	{
+		"caption": "Xdebug: Open Breakpoint View",
+		"command": "xdebug_open_breakpoint_view"
+    }
+]

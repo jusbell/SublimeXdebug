@@ -1,6 +1,6 @@
 [
     {
-        "button": "button1", "count":2 , "modifiers": ["alt"],
+        "button": "button1", "count":3,
         "press_command": "drag_select",
         "command": "xdebug_double_click"
     }
