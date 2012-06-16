@@ -759,7 +759,6 @@ buffers['stack'] = XdebugStackView("Xdebug Stack")
 buffers['inspect'] = XdebugInspectView("Xdebug Inspect")
 buffers['breakpoints'] = XdebugBreakpointView("Xdebug Breakpoints")
 
-
 '''
 ================================== SublimeXdebug Commands ==================================
 '''
@@ -857,32 +856,33 @@ class XdebugCommand(sublime_plugin.TextCommand):
     The Xdebug main quick panel menu
     '''
     def run(self, edit):
-        mapping = {
-            'xdebug_breakpoint': 'Add/Remove Breakpoint',
-            'xdebug_clear_all_breakpoints': 'Clear all Breakpoints',
+        command_map = {
+            'Add/Remove Breakpoint': 'xdebug_breakpoint',
+            'Clear all Breakpoints': 'xdebug_clear_all_breakpoints',
         }
 
-        if protocol:
-            mapping['xdebug_stop'] = 'Stop debugging'
-        else:
-            mapping['xdebug_listen'] = 'Start debugging'
-
         if is_debugging():
-            mapping.update({
-                'xdebug_status': 'Status',
-                'xdebug_execute': 'Execute',
-                'xdebug_inspect': 'Inspect',
+            command_map.update({
+                'Inspect': 'xdebug_inspect',
+                'Status': 'xdebug_status',
+                'Stop debugging': 'xdebug_stop',
             })
+        else:
+            command_map['Start debugging'] = 'xdebug_listen'
 
-        self.cmds = mapping.keys()
-        self.items = mapping.values()
+        self.cmds = command_map
+        self.items = command_map.keys()
+        self.items.sort()
+
         self.view.window().show_quick_panel(self.items, self.callback)
 
     def callback(self, index):
         if index == -1:
             return
 
-        command = self.cmds[index]
+        item = self.items[index]
+        command = self.cmds[item]
+
         self.view.run_command(command)
 
 
@@ -996,40 +996,6 @@ class XdebugStatus(sublime_plugin.TextCommand):
         return is_debugging()
 
 
-class XdebugExecute(sublime_plugin.TextCommand):
-    '''
-    Execute arbitrary DBGp command
-    '''
-    def run(self, edit):
-        self.view.window().show_input_panel('Xdebug Execute', '',
-            self.on_done, self.on_change, self.on_cancel)
-
-    def is_enabled(self):
-        return is_debugging()
-
-    def on_done(self, line):
-        if ' ' in line:
-            command, args = line.split(' ', 1)
-        else:
-            command, args = line, ''
-        protocol.send(command, args)
-        res = protocol.read().firstChild
-
-        window = self.view.window()
-        output = window.get_output_panel('xdebug_execute')
-        edit = output.begin_edit()
-        output.erase(edit, sublime.Region(0, output.size()))
-        output.insert(edit, 0, res.toprettyxml())
-        output.end_edit(edit)
-        window.run_command('show_panel', {"panel": 'output.xdebug_execute'})
-
-    def on_change(self, line):
-        pass
-
-    def on_cancel(self):
-        pass
-
-
 class EventListener(sublime_plugin.EventListener):
 
     def on_load(self, view):
@@ -1069,19 +1035,33 @@ class XdebugDoubleClick(sublime_plugin.TextCommand):
 
 class XdebugInspectCommand(sublime_plugin.TextCommand):
     def run(self, edit):
+
+        sel = ''
         for region in self.view.sel():
             if not region.empty():
-                expr = self.view.substr(region)
-                protocol.send('eval', data=expr)
+                sel = self.view.substr(region)
 
-                doc = protocol.read()
-                lookup_view('inspect').update(doc, expr)
-
-    def callback(self, index):
-        pass
+        self.view.window().show_input_panel('Xdebug Inspect',
+            sel, self.on_done, self.on_change, self.on_cancel)
 
     def is_enabled(self):
         return is_debugging()
+
+    def on_done(self, expr):
+        protocol.send('eval', data=expr)
+        doc = protocol.read()
+
+        inspect_view = lookup_view('inspect')
+        if not inspect_view.is_open:
+            inspect_view.open()
+
+        inspect_view.update(doc, expr)
+
+    def on_change(self, line):
+        pass
+
+    def on_cancel(self):
+        pass
 
 
 class XdebugOpenBreakpointView(sublime_plugin.WindowCommand):
