@@ -438,7 +438,7 @@ class XdebugStackElement(object):
 class XdebugBreakpoint(object):
 
     def __init__(self, uri, line):
-        self.line = int(line)
+        self.lineno = int(line)
         self.uri = uri
         self.id = None
         self.set = False
@@ -449,7 +449,7 @@ class XdebugBreakpoint(object):
 
     def add(self):
         if is_debugging():
-            protocol.send('breakpoint_set', t='line', f=self.uri, n=self.line)
+            protocol.send('breakpoint_set', t='line', f=self.uri, n=self.lineno)
             res = protocol.read()
             self.id = XdebugResponse.get_breakpoint_id(res)
             self.set = True if self.id else False
@@ -465,7 +465,7 @@ class XdebugBreakpoint(object):
             return False
 
     def __str__(self):
-        return "%s : [line:%d]" % (os.path.basename(self.uri), self.line)
+        return "%s : [line:%d]" % (os.path.basename(self.uri), self.lineno)
 
 
 class XdebugView(object):
@@ -592,6 +592,41 @@ class XdebugView(object):
         self.add_regions('xdebug_current_line', region, 'xdebug.current_line', 'bookmark', sublime.HIDDEN)
         self.center(line)
 
+    def show_quick_panel(self, command_map=None):
+        if not command_map:
+            command_map = {
+                'Add/Remove Breakpoint': 'xdebug_breakpoint',
+                'Clear all Breakpoints': 'xdebug_clear_all_breakpoints',
+            }
+
+            if is_debugging():
+                command_map.update({
+                    'Inspect': 'xdebug_inspect',
+                    'Status': 'xdebug_status',
+                    'Stop debugging': 'xdebug_stop',
+                })
+            else:
+                command_map['Start debugging'] = 'xdebug_listen'
+
+        self.cmds = command_map
+        self.items = command_map.keys()
+        self.items.sort()
+
+        self.view.window().show_quick_panel(self.items, self.on_quick_panel_select)
+
+        return command_map
+
+    def on_quick_panel_select(self, index):
+        if index == -1:
+            return
+
+        command = self.cmds[self.items[index]]
+
+        if isinstance(command, tuple):
+            self.view.run_command(command[0], command[1])
+        else:
+            self.view.run_command(command)
+
     def update(self, raw, append=False):
         if not self.is_open:
             return
@@ -678,6 +713,17 @@ class XdebugBreakpointView(XdebugView):
         if found:
             xview.add_regions('dbgp_breakpoints', xview.lines(found), 'dbgp.breakpoint', 'dot', sublime.HIDDEN)
 
+    def show_quick_panel(self):
+        command_map = {}
+        if self.has_breakpoints():
+            for uri in self.breaks:
+                for line in self.breaks[uri]:
+                    bp = self.breaks[uri][line]
+                    command_text = 'Open %s' % str(bp)
+                    command_map[command_text] = ('xdebug_open_breakpoint', {'uri': uri, 'line': line})
+
+        super(XdebugBreakpointView, self).show_quick_panel(command_map)
+
     def update(self):
         if self.is_open and self.breaks:
             out = []
@@ -737,6 +783,12 @@ class XdebugInspectView(XdebugVariableView):
             doc = protocol.read()
             self.update(doc, expr)
 
+    def show_quick_panel(self):
+        command_map = {
+            'Clear Inspections': 'xdebug_clear_inspections'
+        }
+        super(XdebugInspectView, self).show_quick_panel(command_map)
+
     def update(self, data=None, expr=None):
         if isinstance(data, xml.dom.minidom.Document) or isinstance(data, xml.dom.minidom.Element):
             data = XdebugResponse.get_variables(data)
@@ -754,6 +806,14 @@ class XdebugStackView(XdebugView):
     def __init__(self, name):
         super(XdebugStackView, self).__init__(name=name)
         self.stack = []
+
+    def show_quick_panel(self):
+        command_map = {}
+        for stack in self.stack:
+            command_text = 'Open stack %s : %s' % (stack.level, os.path.basename(stack.uri))
+            command_map[command_text] = ('xdebug_open_stack_element', {'index': stack.level})
+
+        super(XdebugStackView, self).show_quick_panel(command_map)
 
     def update(self, data=None):
         if isinstance(data, xml.dom.minidom.Document) or isinstance(data, xml.dom.minidom.Element):
@@ -866,34 +926,8 @@ class XdebugCommand(sublime_plugin.TextCommand):
     The Xdebug main quick panel menu
     '''
     def run(self, edit):
-        command_map = {
-            'Add/Remove Breakpoint': 'xdebug_breakpoint',
-            'Clear all Breakpoints': 'xdebug_clear_all_breakpoints',
-        }
-
-        if is_debugging():
-            command_map.update({
-                'Inspect': 'xdebug_inspect',
-                'Status': 'xdebug_status',
-                'Stop debugging': 'xdebug_stop',
-            })
-        else:
-            command_map['Start debugging'] = 'xdebug_listen'
-
-        self.cmds = command_map
-        self.items = command_map.keys()
-        self.items.sort()
-
-        self.view.window().show_quick_panel(self.items, self.callback)
-
-    def callback(self, index):
-        if index == -1:
-            return
-
-        item = self.items[index]
-        command = self.cmds[item]
-
-        self.view.run_command(command)
+        xview = lookup_view(self.view)
+        command_map = xview.show_quick_panel()
 
 
 class XdebugContinueCommand(sublime_plugin.TextCommand):
@@ -1015,6 +1049,42 @@ class EventListener(sublime_plugin.EventListener):
         lookup_view(view).on_load()
 
 
+class XdebugOpenStackElement(sublime_plugin.TextCommand):
+
+    def run(self, edit, index=0):
+        xview = lookup_view(self.view)
+        index = int(index)
+        if xview.stack[index]:
+            stack = xview.stack[index]
+            if stack:
+                show_file(self.view.window(), stack.uri, stack.lineno)
+
+    def is_enabled(self):
+        return lookup_view('stack').is_open
+
+    def is_visible(self):
+        return lookup_view('stack').is_open
+
+
+class XdebugOpenBreakpoint(sublime_plugin.TextCommand):
+
+    def run(self, edit, uri=None, line=None):
+        if not uri and not line:
+            return
+
+        xview = lookup_view(self.view)
+        bp = xview.breaks[uri][line]
+        if bp:
+            show_file(self.view.window(), bp.uri, bp.lineno)
+
+    def is_enabled(self):
+        return lookup_view('breakpoints').is_open
+
+    def is_visible(self):
+        return lookup_view('breakpoints').is_open
+
+
+'''
 class XdebugDoubleClick(sublime_plugin.TextCommand):
     def run(self, edit):
         xview = lookup_view(self.view)
@@ -1038,7 +1108,7 @@ class XdebugDoubleClick(sublime_plugin.TextCommand):
 
     def is_enabled(self):
         return is_debugging()
-
+'''
 
 class XdebugInspectCommand(sublime_plugin.TextCommand):
     def run(self, edit):
@@ -1069,6 +1139,16 @@ class XdebugInspectCommand(sublime_plugin.TextCommand):
 
     def on_cancel(self):
         pass
+
+
+class XdebugClearInspectionsCommand(sublime_plugin.TextCommand):
+
+    def run(self, edit):
+        inspect_view = lookup_view('inspect')
+        inspect_view.clear()
+
+    def is_enabled(self):
+        return lookup_view('inspect').is_open
 
 
 class XdebugOpenBreakpointView(sublime_plugin.WindowCommand):
