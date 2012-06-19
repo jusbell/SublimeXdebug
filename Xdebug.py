@@ -435,6 +435,39 @@ class XdebugStackElement(object):
         return unicode(XdebugStackElement.template.format(level=self.level, type=self.type, where=self.where, lineno=self.lineno, uri=self.uri))
 
 
+class XdebugBreakpoint(object):
+
+    def __init__(self, uri, line):
+        self.line = int(line)
+        self.uri = uri
+        self.id = None
+        self.set = False
+        self.add()
+
+    def is_set(self):
+        return self.set
+
+    def add(self):
+        if is_debugging():
+            protocol.send('breakpoint_set', t='line', f=self.uri, n=self.line)
+            res = protocol.read()
+            self.id = XdebugResponse.get_breakpoint_id(res)
+            self.set = True if self.id else False
+            #print 'Breakpoint set: %s' % self.__str__()
+        return self.set
+
+    def remove(self):
+        if is_debugging():
+            protocol.send('breakpoint_remove', d=self.id)
+            #print 'Breakpoint remove: %s' % self.__str__()
+            return True
+        else:
+            return False
+
+    def __str__(self):
+        return "%s : [line:%d]" % (os.path.basename(self.uri), self.line)
+
+
 class XdebugView(object):
     '''
     The XdebugView is a normal sublime view with some convenience methods.
@@ -582,39 +615,6 @@ class XdebugView(object):
 
         self.view.end_edit(edit)
         self.view.set_read_only(True)
-
-
-class XdebugBreakpoint(object):
-
-    def __init__(self, uri, line):
-        self.line = int(line)
-        self.uri = uri
-        self.id = None
-        self.set = False
-        self.add()
-
-    def is_set(self):
-        return self.set
-
-    def add(self):
-        if is_debugging():
-            protocol.send('breakpoint_set', t='line', f=self.uri, n=self.line)
-            res = protocol.read()
-            self.id = XdebugResponse.get_breakpoint_id(res)
-            self.set = True if self.id else False
-            #print 'Breakpoint set: %s' % self.__str__()
-        return self.set
-
-    def remove(self):
-        if is_debugging():
-            protocol.send('breakpoint_remove', d=self.id)
-            #print 'Breakpoint remove: %s' % self.__str__()
-            return True
-        else:
-            return False
-
-    def __str__(self):
-        return "%s : [line:%d]" % (os.path.basename(self.uri), self.line)
 
 
 class XdebugBreakpointView(XdebugView):
