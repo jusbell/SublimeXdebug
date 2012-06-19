@@ -122,9 +122,7 @@ def reset_current():
     Reset the current line marker
     '''
     global xdebug_current
-    print 'Resetting current...'
     if xdebug_current:
-        print 'we got a current'
         xdebug_current.erase_regions('xdebug_current_line')
         xdebug_current = None
 
@@ -252,7 +250,7 @@ class Protocol(object):
 
     def accept(self):
         serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        print 'Created server socket: ' + str(serv)
+        #print 'Created server socket: ' + str(serv)
         if serv:
             try:
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: Waiting for connection'), 0)
@@ -263,7 +261,7 @@ class Protocol(object):
 
                 self.listening = True
                 self.sock = None
-                print 'Server socket listening on port: ' + str(self.port)
+                #print 'Server socket listening on port: ' + str(self.port)
 
             except Exception, x:
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: Could not initialize port'), 0)
@@ -275,16 +273,14 @@ class Protocol(object):
 
             while self.listening:
                 try:
-                    print 'Trying server.accept()...'
                     self.sock, self.address = serv.accept()
                     self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    print 'Connection accepted [%s, %s]' % (str(self.sock), str(self.address))
+                    #print 'Connection accepted [%s, %s]' % (str(self.sock), str(self.address))
                     sublime.set_timeout(lambda: sublime.status_message('Xdebug: Connected'), 0)
                     self.listening = False
                 except socket.timeout:
                     pass
 
-            print 'Socket: ' + str(self.sock)
             if self.sock:
                 self.connected = True
                 self.sock.settimeout(None)
@@ -293,13 +289,11 @@ class Protocol(object):
                 self.listening = False
 
             try:
-                print 'Closing server connection...'
                 serv.close()
                 serv = None
             except:
                 pass
 
-            print 'Returning Socket ' + str(self.sock)
             return self.sock
         else:
             raise ProtocolConnectionException('Could not create socket')
@@ -418,7 +412,7 @@ class XdebugVariable(object):
             out += "%s = uninitialized" % (self.name)
 
         else:
-            out += "%s = '%s'" % (self.fullname, self.value)
+            out += "%s = '%s'" % (self.name, self.value)
 
         return out
 
@@ -503,7 +497,7 @@ class XdebugView(object):
         group = get_setting("%s_view_group" % self.xid, 0)
 
         window.set_view_index(self.view, group, index)
-        print 'View %s init at window location [group=%s, index=%s]' % (self.name, group, index)
+        #print 'View %s init at window location [group=%s, index=%s]' % (self.name, group, index)
 
     def center(self, lineno):
         line = self.lines(lineno)[0]
@@ -565,11 +559,13 @@ class XdebugView(object):
         self.add_regions('xdebug_current_line', region, 'xdebug.current_line', 'bookmark', sublime.HIDDEN)
         self.center(line)
 
-    def update(self, raw):
+    def update(self, raw, append=False):
         if not self.is_open:
             return
 
-        self.clear()
+        if not append:
+            self.clear()
+
         self.view.set_read_only(False)
 
         edit = self.view.begin_edit()
@@ -579,7 +575,11 @@ class XdebugView(object):
         if isinstance(raw, XdebugVariable):
             raw = raw.__str__()
 
-        self.view.insert(edit, 0, raw)
+        if append:
+            self.append(raw, edit, False)
+        else:
+            self.view.insert(edit, 0, raw)
+
         self.view.end_edit(edit)
         self.view.set_read_only(True)
 
@@ -602,13 +602,13 @@ class XdebugBreakpoint(object):
             res = protocol.read()
             self.id = XdebugResponse.get_breakpoint_id(res)
             self.set = True if self.id else False
-            print 'Breakpoint set: %s' % self.__str__()
+            #print 'Breakpoint set: %s' % self.__str__()
         return self.set
 
     def remove(self):
         if is_debugging():
             protocol.send('breakpoint_remove', d=self.id)
-            print 'Breakpoint remove: %s' % self.__str__()
+            #print 'Breakpoint remove: %s' % self.__str__()
             return True
         else:
             return False
@@ -629,8 +629,6 @@ class XdebugBreakpointView(XdebugView):
         if self.is_open:
             super(XdebugBreakpointView, self).clear()
 
-        print 'clearing breaks: ' + str(self.breaks)
-
         if self.breaks:
             for uri in self.breaks:
                 for line in self.breaks[uri]:
@@ -640,14 +638,10 @@ class XdebugBreakpointView(XdebugView):
         self.update_view_markers()
         self.update()
 
-        print 'breaks cleared: ' + str(self.breaks)
-
     def on_connect(self):
-        print 'On Connect, checking for brekapoints...'
         if self.has_breakpoints():
             for uri in self.breaks:
                 for line in self.breaks[uri]:
-                    print 'breakpoint found at: ' + str(self.breaks[uri][line])
                     self.breaks[uri][line].add()
 
     def add_breakpoint(self, uri, line):
@@ -686,7 +680,6 @@ class XdebugBreakpointView(XdebugView):
 
     def update(self):
         if self.is_open and self.breaks:
-            print 'Update breakpoint view'
             out = []
             for uri in self.breaks:
                 for line in self.breaks[uri]:
@@ -709,18 +702,17 @@ class XdebugVariableView(XdebugView):
 
     def __init__(self, name=None):
         super(XdebugVariableView, self).__init__(name=name)
-        self.vars = None
 
     def create(self):
         super(XdebugVariableView, self).create()
         self.view.set_syntax_file("Packages/SublimeXdebug/Xdebug.tmLanguage")
         self.view.settings().set('fade_fold_buttons', False)
 
-    def update(self, data=None):
+    def update(self, data=None, append=False):
         if isinstance(data, xml.dom.minidom.Document) or isinstance(data, xml.dom.minidom.Element):
             data = XdebugResponse.get_variables(data)
 
-        super(XdebugVariableView, self).update(data)
+        super(XdebugVariableView, self).update(data, append)
         self.view.run_command("fold_all")
 
 
@@ -728,7 +720,22 @@ class XdebugInspectView(XdebugVariableView):
 
     def __init__(self, name):
         super(XdebugInspectView, self).__init__(name=name)
-        self.expression = None
+        self.inspections = []
+
+    def refresh_inspections(self):
+        if not self.is_open:
+            return
+
+        self.clear()
+
+        tmp = self.inspections
+        self.inspections = []
+
+        for inspection in tmp:
+            expr = inspection.name
+            protocol.send('eval', data=expr)
+            doc = protocol.read()
+            self.update(doc, expr)
 
     def update(self, data=None, expr=None):
         if isinstance(data, xml.dom.minidom.Document) or isinstance(data, xml.dom.minidom.Element):
@@ -736,7 +743,10 @@ class XdebugInspectView(XdebugVariableView):
             data = data[0]
             data.name = expr
 
-        super(XdebugInspectView, self).update(data)
+        self.inspections.append(data)
+
+        # Append inspections
+        super(XdebugInspectView, self).update(data, True)
 
 
 class XdebugStackView(XdebugView):
@@ -937,6 +947,9 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
             doc = protocol.read()
             lookup_view('stack').update(doc)
 
+            # update inspections if they exist
+            lookup_view('inspect').refresh_inspections()
+
         if res.getAttribute('status') == 'stopping' or res.getAttribute('status') == 'stopped':
             self.view.run_command('xdebug_stop')
             self.view.run_command('xdebug_listen')
@@ -966,7 +979,7 @@ class XdebugStopCommand(sublime_plugin.TextCommand):
 
             for view in buffers:
                 if buffers[view].xid:
-                    print 'closing view %s' % view
+                    #print 'Closing view %s' % view
                     buffers[view].close()
 
             sublime.active_window().set_layout(original_layout)
@@ -1004,17 +1017,12 @@ class EventListener(sublime_plugin.EventListener):
 
 class XdebugDoubleClick(sublime_plugin.TextCommand):
     def run(self, edit):
-        print "Executing click command"
-        print 'Sublime View: ' + str(self.view) + ' ' + self.view.name()
         xview = lookup_view(self.view)
-        print 'XView View: ' + str(xview)
 
         def get_first_row():
             rows = xview.rows()
             if len(rows) > 0:
                 return rows[0]
-
-        print 'xid: ' + xview.xid
 
         if xview.xid == 'breakpoints':
             row = get_first_row()
@@ -1023,7 +1031,6 @@ class XdebugDoubleClick(sublime_plugin.TextCommand):
                 show_file(self.view.window(), bp.uri)
 
         elif xview.xid == 'stack':
-            print "In stack..."
             row = get_first_row()
             stack = xview.stack[row - 1]
             if stack:
