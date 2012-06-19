@@ -1,12 +1,14 @@
 {
-    // All settings can be specified in a sublime project file. In the sublime project file.
-    // In the prject file, xdebug settings must has "xdebug_" prepended to the setting name.
+    // All settings can be specified in a sublime project file.
     // For example:
     //
     // "settings":
     // {
-    //      "xdebug_port": 9000,
-    //      "xdebug_url": "http://localhost",
+    // 		"xdebug": {
+    //	 		"port": 9000,
+    //	 		"url": "http://localhost",
+    //	 		...
+    // 		}
     //      ...
     // }
 

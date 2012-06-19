@@ -130,8 +130,10 @@ def reset_current():
 def get_setting(key, default=None):
     try:
         settings = sublime.active_window().active_view().settings()
-        if settings.has("xdebug_%s" % key):
-            return settings.get("xdebug_%s" % key)
+        if settings.has("xdebug"):
+            xdebug = settings.get('xdebug')
+            if xdebug and key in xdebug:
+                return xdebug[key]
     except:
         pass
     return sublime.load_settings("SublimeXdebug.sublime-settings").get(key, default)
