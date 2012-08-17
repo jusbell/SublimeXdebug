@@ -9,11 +9,19 @@ import webbrowser
 import xml.dom.minidom
 
 
+session_active = False
 xdebug_current = None
 original_layout = None
 protocol = None
 
 buffers = {}  # Cache for editor views
+
+is_debug_enabled = True
+
+
+def __log(msg):
+    if (is_debug_enabled):
+        print '[Xdebug]: ' % msg
 
 
 def lookup_view(view):
@@ -59,8 +67,10 @@ def remote_debug_session(action='start'):
     '''
     Opens the browser and notifies Xdebug of start and stop commands
     '''
-    global protocol
+    global session_active
+
     url = get_setting('url')
+
     if url:
         if action == 'start':
             url += '?XDEBUG_SESSION_START=sublime.xdebug'
@@ -71,13 +81,20 @@ def remote_debug_session(action='start'):
 
         if url:
             webbrowser.open(url)
+
+        session_active = (url and action == 'start')
     else:
         sublime.set_timeout(lambda: sublime.status_message('Xdebug: No URL defined in project settings file.'), 0)
 
 
-def is_debugging():
+def is_connected():
     global protocol
     return protocol and protocol.connected
+
+
+def is_session_active():
+    global session_active
+    return session_active == True
 
 
 def show_file(window, uri, lineno=None):
@@ -171,7 +188,6 @@ class Protocol(object):
         self.connected = False
         self.listening = False
         self.server = None
-        self.address = None
         del self.transaction_id
         try:
             self.sock.close()
@@ -252,7 +268,8 @@ class Protocol(object):
 
     def accept(self):
         serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        #print 'Created server socket: ' + str(serv)
+        __log('Created server socket: ' + str(serv))
+
         if serv:
             try:
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: Waiting for connection'), 0)
@@ -263,7 +280,8 @@ class Protocol(object):
 
                 self.listening = True
                 self.sock = None
-                #print 'Server socket listening on port: ' + str(self.port)
+
+                __log('Server socket listening on port %s' % str(self.port))
 
             except Exception, x:
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: Could not initialize port'), 0)
@@ -274,10 +292,12 @@ class Protocol(object):
                     listener()
 
             while self.listening:
+                __log('Listening for connection...')
                 try:
+
                     self.sock, self.address = serv.accept()
-                    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    #print 'Connection accepted [%s, %s]' % (str(self.sock), str(self.address))
+                    __log('Connection accepted [%s, %s]' % (str(self.sock), str(self.address)))
+
                     sublime.set_timeout(lambda: sublime.status_message('Xdebug: Connected'), 0)
                     self.listening = False
                 except socket.timeout:
@@ -450,7 +470,7 @@ class XdebugBreakpoint(object):
         return self.set
 
     def add(self):
-        if is_debugging():
+        if is_connected():
             protocol.send('breakpoint_set', t='line', f=self.uri, n=self.lineno)
             res = protocol.read()
             self.id = XdebugResponse.get_breakpoint_id(res)
@@ -459,7 +479,7 @@ class XdebugBreakpoint(object):
         return self.set
 
     def remove(self):
-        if is_debugging():
+        if is_connected():
             protocol.send('breakpoint_remove', d=self.id)
             #print 'Breakpoint remove: %s' % self.__str__()
             return True
@@ -601,11 +621,12 @@ class XdebugView(object):
                 'Clear all Breakpoints': 'xdebug_clear_all_breakpoints',
             }
 
-            if is_debugging():
+            if is_connected():
                 command_map.update({
+                    #'Continue': 'xdebug_continue',
                     'Inspect': 'xdebug_inspect',
                     'Status': 'xdebug_status',
-                    'Stop debugging': 'xdebug_stop',
+                    'Stop debugging': 'xdebug_stop_session',
                 })
             else:
                 command_map['Start debugging'] = 'xdebug_listen'
@@ -852,29 +873,33 @@ class XdebugListenCommand(sublime_plugin.TextCommand):
 
     def thread_callback(self):
         protocol.accept()
-        if is_debugging():
+        if is_connected():
             sublime.set_timeout(self.gui_callback, 0)
+        else:
+            __log('#thread_callback: Xdebug is not connected')
 
     def connect_callback(self):
         global original_layout
-        remote_debug_session('start')
 
-        window = sublime.active_window()
-        original_layout = window.get_layout()
-        window.set_layout(get_setting('view_layout', {
-            "cols": [0.0, 0.5, 1.0],
-            "rows": [0.0, 0.7, 1.0],
-            "cells": [
-                [0, 0, 2, 1],
-                [0, 1, 1, 2],
-                [1, 1, 2, 2]
-            ]
-        }))
+        if not is_session_active():
+            remote_debug_session('start')
 
-        # Open all auto open views on xdebugger start
-        for view in buffers.values():
-            if view.xid and view.is_auto_open():
-                view.open()
+            window = sublime.active_window()
+            original_layout = window.get_layout()
+            window.set_layout(get_setting('view_layout', {
+                "cols": [0.0, 0.5, 1.0],
+                "rows": [0.0, 0.7, 1.0],
+                "cells": [
+                    [0, 0, 2, 1],
+                    [0, 1, 1, 2],
+                    [1, 1, 2, 2]
+                ]
+            }))
+
+            # Open all auto open views on xdebugger start
+            for view in buffers.values():
+                if view.xid and view.is_auto_open():
+                    view.open()
 
     def gui_callback(self):
         # Dump the first xdebug message...
@@ -929,7 +954,7 @@ class XdebugCommand(sublime_plugin.TextCommand):
     '''
     def run(self, edit):
         xview = lookup_view(self.view)
-        command_map = xview.show_quick_panel()
+        xview.show_quick_panel()
 
 
 class XdebugContinueCommand(sublime_plugin.TextCommand):
@@ -959,6 +984,7 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
         if type(state) == int:
             state = self.states.keys()[state]
 
+        __log('Here we go!')
         reset_current()
 
         protocol.send(state)
@@ -992,7 +1018,7 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
             sublime.set_timeout(lambda: sublime.status_message('Xdebug: Page finished executing. Reload to continue debugging.'), 0)
 
     def is_enabled(self):
-        if is_debugging():
+        if is_connected():
             return True
         if protocol:
             sublime.set_timeout(lambda: sublime.status_message('Xdebug: Waiting for executing to start'), 0)
@@ -1009,17 +1035,9 @@ class XdebugStopCommand(sublime_plugin.TextCommand):
         global protocol
         global original_layout
         try:
-            remote_debug_session('stop')
             protocol.stop()
             reset_current()
-
-            for view in buffers:
-                if buffers[view].xid:
-                    #print 'Closing view %s' % view
-                    buffers[view].close()
-
-            sublime.active_window().set_layout(original_layout)
-
+            __log('Xdebug socket connection terminated')
         except:
             pass
 
@@ -1032,6 +1050,32 @@ class XdebugStopCommand(sublime_plugin.TextCommand):
         return False
 
 
+class XdebugStopSessionCommand(sublime_plugin.TextCommand):
+    '''
+    Run the xdebug_stop command to close the current connection then also initiate a
+    session stop. when the session stops, the layout should be set back to the origional
+    layout, and the xdebug session stop command sent to the server
+    '''
+    def run(self, edit):
+        global original_layout
+
+        self.view.run_command('xdebug_stop')
+
+        try:
+            remote_debug_session('stop')
+            for view in buffers:
+                if buffers[view].xid:
+                    #print 'Closing view %s' % view
+                    buffers[view].close()
+
+            sublime.active_window().set_layout(original_layout)
+        except:
+            pass
+
+    def is_enabled(self):
+        return True
+
+
 class XdebugStatus(sublime_plugin.TextCommand):
     '''
     DBGp status command
@@ -1042,7 +1086,7 @@ class XdebugStatus(sublime_plugin.TextCommand):
         sublime.status_message(res.getAttribute('reason') + ': ' + res.getAttribute('status'))
 
     def is_enabled(self):
-        return is_debugging()
+        return is_connected()
 
 
 class EventListener(sublime_plugin.EventListener):
@@ -1109,8 +1153,9 @@ class XdebugDoubleClick(sublime_plugin.TextCommand):
                 show_file(self.view.window(), stack.uri, stack.lineno)
 
     def is_enabled(self):
-        return is_debugging()
+        return is_connected()
 '''
+
 
 class XdebugInspectCommand(sublime_plugin.TextCommand):
     def run(self, edit):
@@ -1124,7 +1169,7 @@ class XdebugInspectCommand(sublime_plugin.TextCommand):
             sel, self.on_done, self.on_change, self.on_cancel)
 
     def is_enabled(self):
-        return is_debugging()
+        return is_connected()
 
     def on_done(self, expr):
         protocol.send('eval', data=expr)
