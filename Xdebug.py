@@ -1039,6 +1039,10 @@ class XdebugStopCommand(sublime_plugin.TextCommand):
         try:
             protocol.stop()
             reset_current()
+
+            lookup_view('context').clear()
+            lookup_view('stack').clear()
+
             _log('Xdebug socket connection terminated')
         except:
             pass
