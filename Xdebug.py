@@ -522,9 +522,13 @@ class XdebugView(object):
         self.is_open = True
 
     def close(self):
-        if self.view:
+        print 'In close'
+        print self.view
+        if self.view is not None and isinstance(self.view, sublime.View):
+            print 'doing this'
             sublime.active_window().focus_view(self.view)
             sublime.active_window().run_command("close")
+            print 'view focused and closing'
             self.view = None
             self.is_open = False
 
@@ -1071,7 +1075,7 @@ class XdebugStopSessionCommand(sublime_plugin.TextCommand):
             remote_debug_session('stop')
             for view in buffers:
                 if buffers[view].xid:
-                    #print 'Closing view %s' % view
+                    _log('Closing view %s' % view)
                     buffers[view].close()
 
             sublime.active_window().set_layout(original_layout)
