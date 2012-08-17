@@ -1101,6 +1101,11 @@ class XdebugStatus(sublime_plugin.TextCommand):
 
 class EventListener(sublime_plugin.EventListener):
 
+    def on_query_context(self, view, key, operator, operand, match_all):
+        if key == "xdebug_running":
+            return is_connected() == operand
+        return None
+
     def on_load(self, view):
         lookup_view(view).on_load()
 
