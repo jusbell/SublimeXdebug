@@ -19,9 +19,9 @@ buffers = {}  # Cache for editor views
 is_debug_enabled = True
 
 
-def __log(msg):
+def _log(msg):
     if (is_debug_enabled):
-        print '[Xdebug]: ' % msg
+        print '[Xdebug]: %s' % msg
 
 
 def lookup_view(view):
@@ -268,7 +268,7 @@ class Protocol(object):
 
     def accept(self):
         serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        __log('Created server socket: ' + str(serv))
+        _log('Created server socket: ' + str(serv))
 
         if serv:
             try:
@@ -281,7 +281,7 @@ class Protocol(object):
                 self.listening = True
                 self.sock = None
 
-                __log('Server socket listening on port %s' % str(self.port))
+                _log('Server socket listening on port %s' % str(self.port))
 
             except Exception, x:
                 sublime.set_timeout(lambda: sublime.status_message('Xdebug: Could not initialize port'), 0)
@@ -292,11 +292,11 @@ class Protocol(object):
                     listener()
 
             while self.listening:
-                __log('Listening for connection...')
+                _log('Listening for connection...')
                 try:
 
                     self.sock, self.address = serv.accept()
-                    __log('Connection accepted [%s, %s]' % (str(self.sock), str(self.address)))
+                    _log('Connection accepted [%s, %s]' % (str(self.sock), str(self.address)))
 
                     sublime.set_timeout(lambda: sublime.status_message('Xdebug: Connected'), 0)
                     self.listening = False
@@ -625,9 +625,11 @@ class XdebugView(object):
                 command_map.update({
                     #'Continue': 'xdebug_continue',
                     'Inspect': 'xdebug_inspect',
-                    'Status': 'xdebug_status',
-                    'Stop debugging': 'xdebug_stop_session',
+                    'Status': 'xdebug_status'
                 })
+
+            if protocol and protocol.listening or is_connected():
+                command_map['Stop debugging'] = 'xdebug_stop_session'
             else:
                 command_map['Start debugging'] = 'xdebug_listen'
 
@@ -876,7 +878,7 @@ class XdebugListenCommand(sublime_plugin.TextCommand):
         if is_connected():
             sublime.set_timeout(self.gui_callback, 0)
         else:
-            __log('#thread_callback: Xdebug is not connected')
+            _log('#thread_callback: Xdebug is not connected')
 
     def connect_callback(self):
         global original_layout
@@ -984,7 +986,7 @@ class XdebugContinueCommand(sublime_plugin.TextCommand):
         if type(state) == int:
             state = self.states.keys()[state]
 
-        __log('Here we go!')
+        _log('Here we go!')
         reset_current()
 
         protocol.send(state)
@@ -1037,7 +1039,7 @@ class XdebugStopCommand(sublime_plugin.TextCommand):
         try:
             protocol.stop()
             reset_current()
-            __log('Xdebug socket connection terminated')
+            _log('Xdebug socket connection terminated')
         except:
             pass
 
