@@ -16,7 +16,7 @@ protocol = None
 
 buffers = {}  # Cache for editor views
 
-is_debug_enabled = True
+is_debug_enabled = False
 
 
 def _log(msg):
@@ -547,7 +547,7 @@ class XdebugView(object):
         self.view.set_scratch(True)
         self.view.set_name(self.name)
         self.view.settings().set('command_mode', False)
-        self.view.settings().set('word_wrap', False)
+        self.view.settings().set('word_wrap', 'auto')
 
         if self.name != None:
             self.view.set_name(self.name)
@@ -615,7 +615,7 @@ class XdebugView(object):
             self.current_line = line
             return
         region = self.lines(line)
-        self.add_regions('xdebug_current_line', region, 'xdebug.current_line', 'bookmark', sublime.HIDDEN)
+        self.add_regions('xdebug_current_line', region, 'xdebug.current_line', 'bookmark', sublime.DRAW_OUTLINED)
         self.center(line)
 
     def show_quick_panel(self, command_map=None):
